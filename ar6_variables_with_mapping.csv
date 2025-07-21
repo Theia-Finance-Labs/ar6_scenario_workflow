@@ -66,7 +66,7 @@ Emissions|Sulfur|Energy|Demand|Transportation|Passenger,Emissions,Sulfur,Energy,
 Energy Service|Transportation|Aviation,Energy Service,Transportation,Aviation,,,Transportation,Aviation,,,
 Final Energy|Transportation|Rail,Final Energy,Transportation,Rail,,,Transportation,Rail,,,
 Final Energy|Transportation|Rail|Freight,Final Energy,Transportation,Rail,Freight,,Transportation,Rail,Freight,,
-Cumulative Capacity|Electricity|Wind|Offshore,Cumulative Capacity,Electricity,Wind,Offshore,,Power,Wind,Wind - Offshore,Wind,
+Cumulative Capacity|Electricity|Wind|Offshore,Cumulative Capacity,Electricity,Wind,Offshore,,Renewables,Wind,Wind - Offshore,Wind,
 Emissions|CO2|Energy|Demand|Residential and Commercial|Residential|Heating|Cooking,Emissions,CO2,Energy,Demand,Residential and Commercial,Residential and Commercial,Demand,Energy,,
 Final Energy|Residential and Commercial|Heating,Final Energy,Residential and Commercial,Heating,,,Heating,,,,
 Final Energy|Residential and Commercial|Heating|Water,Final Energy,Residential and Commercial,Heating,Water,,Heating,Water,,,
@@ -365,7 +365,7 @@ Water Consumption|Electricity|Biomass|w/ CCS,Water Consumption,Electricity,Bioma
 Water Withdrawal|Electricity|Coal|w/ CCS,Water Withdrawal,Electricity,Coal,w/ CCS,,Power,Coal,Coal - w/ CCS,Coal,w/ CCS
 Water Withdrawal|Electricity|Wind,Water Withdrawal,Electricity,Wind,,,Renewables,Wind,Wind,Wind,
 Capacity Additions|Electricity|Biomass,Capacity Additions,Electricity,Biomass,,,Power,Biomass,Biomass,Biomass,
-Capacity Additions|Electricity|Wind,Capacity Additions,Electricity,Wind,,,Power,Wind,Wind,Wind,
+Capacity Additions|Electricity|Wind,Capacity Additions,Electricity,Wind,,,Renewables,Wind,Wind,Wind,
 Capacity|Electricity|Hydro,Capacity,Electricity,Hydro,,,Renewables,Hydro,Hydro,Hydro,
 Capacity|Electricity|Solar,Capacity,Electricity,Solar,,,Power,Solar,,Solar,
 Capital Cost|Liquids|Biomass|w/ CCS,Capital Cost,Liquids,Biomass,w/ CCS,,Biomass,Liquids,Biomass - w/ CCS,,w/ CCS
@@ -559,7 +559,7 @@ Lifetime|Electricity|Coal|w/ CCS,Lifetime,Electricity,Coal,w/ CCS,,Power,Coal,Co
 Lifetime|Electricity|Solar|CSP,Lifetime,Electricity,Solar,CSP,,Renewables,Solar,Solar - CSP,Solar,
 Primary Energy|Ocean,Primary Energy,Ocean,,,,Renewables,Ocean,Ocean,,
 Secondary Energy|Hydrogen,Secondary Energy,Hydrogen,,,,Hydrogen,,Hydrogen,,
-Capacity Additions|Electricity|Wind|Offshore,Capacity Additions,Electricity,Wind,Offshore,,Power,Wind,Wind - Offshore,Wind,
+Capacity Additions|Electricity|Wind|Offshore,Capacity Additions,Electricity,Wind,Offshore,,Renewables,Wind,Wind - Offshore,Wind,
 Capacity|Hydrogen|Electricity,Capacity,Hydrogen,Electricity,,,Power,Hydrogen,Hydrogen - Electricity,,
 Capacity Additions|Electricity|Storage Capacity,Capacity Additions,Electricity,Storage Capacity,,,Power,Storage,Storage Capacity,Storage Capacity,
 Energy Service|Floor Space|Commercial,Energy Service,Floor Space,Commercial,,,Floor Space,Commercial,,,
@@ -570,7 +570,7 @@ Emissions|CO2|Energy|Demand|Residential and Commercial|Residential|Heating|Water
 Final Energy|Residential and Commercial|Commercial|Heating,Final Energy,Residential and Commercial,Commercial,Heating,,Commercial,Heating,,,
 Household Expenditure|Energy|Share,Household Expenditure,Energy,Share,,,,,,,
 Trade|Value|Imports,Trade,Value,Imports,,,,,,,
-Cumulative Capacity|Electricity|Wind,Cumulative Capacity,Electricity,Wind,,,Power,Wins,Wind,Wind,
+Cumulative Capacity|Electricity|Wind,Cumulative Capacity,Electricity,Wind,,,Renewables,Wins,Wind,Wind,
 Primary Energy|Oil|Liquids,Primary Energy,Oil,Liquids,,,Oil,Oil,Oil - Liquids,Liquids,
 Emissions|CO2|Energy|Demand|Residential and Commercial|Commercial|Heating|Water,Emissions,CO2,Energy,Demand,Residential and Commercial,Residential and Commercial,Demand,Energy,,
 Energy Service|Residential and Commercial|Commercial|Health|Floor space,Energy Service,Residential and Commercial,Commercial,Health,Floor space,Residential and Commercial,Commercial,,,
@@ -692,7 +692,7 @@ Water Consumption|Electricity|Oil|w/o CCS,Water Consumption,Electricity,Oil,w/o 
 Agricultural Demand,Agricultural Demand,,,,,Agriculture,,,,
 Capacity Additions|Electricity|Coal,Capacity Additions,Electricity,Coal,,,Power,Coal,Coal,Coal,
 Capacity Additions|Electricity|Gas|w/o CCS,Capacity Additions,Electricity,Gas,w/o CCS,,Power,Gas,Gas - w/o CCS,Gas,w/o CCS
-Capacity Additions|Electricity|Wind|Onshore,Capacity Additions,Electricity,Wind,Onshore,,Power,Wind,Wind - Onshore,Wind,
+Capacity Additions|Electricity|Wind|Onshore,Capacity Additions,Electricity,Wind,Onshore,,Renewables,Wind,Wind - Onshore,Wind,
 Capacity|Electricity,Capacity,Electricity,,,,Power,Electricity,,,
 Capacity|Electricity|Biomass|w/ CCS,Capacity,Electricity,Biomass,w/ CCS,,Power,Biomass,w/ CCS,Biomass,w/ CCS
 Capacity|Electricity|Biomass|w/o CCS,Capacity,Electricity,Biomass,w/o CCS,,Power,Biomass,w/o CCS,Biomass,w/o CCS
@@ -860,7 +860,7 @@ Cumulative Capacity|Electricity|Biomass|w/o CCS,Cumulative Capacity,Electricity,
 Cumulative Capacity|Electricity|Coal|w/ CCS,Cumulative Capacity,Electricity,Coal,w/ CCS,,Power,Coal,Coal - w/ CCS,Coal,w/ CCS
 Cumulative Capacity|Electricity|Coal|w/o CCS,Cumulative Capacity,Electricity,Coal,w/o CCS,,Power,Coal,Coal - w/o CCS,Coal,w/o CCS
 Cumulative Capacity|Electricity|Gas|w/ CCS,Cumulative Capacity,Electricity,Gas,w/ CCS,,Power,Gas,Gas - w/ CCS,Gas,w/ CCS
-Cumulative Capacity|Electricity|Wind|Onshore,Cumulative Capacity,Electricity,Wind,Onshore,,Power,Wind,Wind - Onshore,Wind,
+Cumulative Capacity|Electricity|Wind|Onshore,Cumulative Capacity,Electricity,Wind,Onshore,,Renewables,Wind,Wind - Onshore,Wind,
 Final Energy|Transportation|Other,Final Energy,Transportation,Other,,,Transportation,Other,,,
 Population|Risk of Hunger,Population,Risk of Hunger,,,,,,,,
 Final Energy|Residential and Commercial|Residential|Heat,Final Energy,Residential and Commercial,Residential,Heat,,Residential,Heat,,,
@@ -1030,7 +1030,7 @@ Capacity Additions|Electricity|Nuclear,Capacity Additions,Electricity,Nuclear,,,
 Capacity Additions|Electricity|Oil,Capacity Additions,Electricity,Oil,,,Power,Oil,Oil,Oil,
 Capacity|Electricity|Coal|w/ CCS,Capacity,Electricity,Coal,w/ CCS,,Power,Coal,Coal - w/ CCS,Coal,w/ CCS
 Capacity|Electricity|Oil|w/o CCS,Capacity,Electricity,Oil,w/o CCS,,Power,Oil,Oil - w/o CCS,Oil,w/o CCS
-Capacity|Electricity|Wind|Onshore,Capacity,Electricity,Wind,Onshore,,Power,Wind,Wind - Onshore,Wind,
+Capacity|Electricity|Wind|Onshore,Capacity,Electricity,Wind,Onshore,,Renewables,Wind,Wind - Onshore,Wind,
 Capital Cost|Liquids|Biomass|w/o CCS,Capital Cost,Liquids,Biomass,w/o CCS,,Biomass,Liquids,Biomass - w/o CCS,,w/o CCS
 Cumulative Capacity|Electricity|Gas|w/o CCS,Cumulative Capacity,Electricity,Gas,w/o CCS,,Power,Gas,Gas - w/o CCS,Gas,w/o CCS
 Efficiency|Electricity|Gas|w/o CCS,Efficiency,Electricity,Gas,w/o CCS,,Power,Gas,Gas - w/o CCS,Gas,w/o CCS
@@ -1216,7 +1216,7 @@ Land Cover|Cropland|Cereals,Land Cover,Cropland,Cereals,,,,,,,
 Population|Rural,Population,Rural,,,,,,,,
 Emissions|CO2|Other,Emissions,CO2,Other,,,,,Other,,
 Emissions|N2O|Other,Emissions,N2O,Other,,,,,Other,,
-Capacity|Electricity|Wind|Offshore,Capacity,Electricity,Wind,Offshore,,Power,Wind,Wind - Offshore,Wind,
+Capacity|Electricity|Wind|Offshore,Capacity,Electricity,Wind,Offshore,,Renewables,Wind,Wind - Offshore,Wind,
 Carbon Sequestration|Direct Air Capture,Carbon Sequestration,Direct Air Capture,,,,,,Direct Air Capture,,
 Carbon Sequestration|Land Use|Soil Carbon Management,Carbon Sequestration,Land Use,Soil Carbon Management,,,,,Land Use,,
 Emissions|CO2|Energy|Demand|Other Sector,Emissions,CO2,Energy,Demand,Other Sector,Other Sector,Demand,Energy,,
@@ -1370,7 +1370,7 @@ Agricultural Production|Non-Energy|Crops,Agricultural Production,Non-Energy,Crop
 Capacity Additions|Electricity|Biomass|w/ CCS,Capacity Additions,Electricity,Biomass,w/ CCS,,Power,Biomass,Biomass - w/ CCS,Biomass,w/ CCS
 Capacity Additions|Electricity|Gas|w/ CCS,Capacity Additions,Electricity,Gas,w/ CCS,,Power,Gas,Gas - w/ CCS,Gas,w/ CCS
 Capacity Additions|Electricity|Oil|w/o CCS,Capacity Additions,Electricity,Oil,w/o CCS,,Power,Oil,Oil - w/o CCS,Oil,w/o CCS
-Capacity|Electricity|Wind,Capacity,Electricity,Wind,,,Power,Wind,Wind,Wind,
+Capacity|Electricity|Wind,Capacity,Electricity,Wind,,,Renewables,Wind,Wind,Wind,
 Capacity|Liquids|Biomass|w/o CCS,Capacity,Liquids,Biomass,w/o CCS,,Power,Liquids,,Biomass,w/o CCS
 Capital Cost|Electricity|Coal|w/ CCS,Capital Cost,Electricity,Coal,w/ CCS,,Power,Coal,Coal - w/ CCS,,w/ CCS
 Capital Cost|Electricity|Coal|w/o CCS,Capital Cost,Electricity,Coal,w/o CCS,,Power,Coal,Coal - w/o CCS,,w/o CCS
