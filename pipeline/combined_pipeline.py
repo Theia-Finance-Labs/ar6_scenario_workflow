@@ -381,8 +381,79 @@ def step2_filter_and_pivot() -> None:
             rename_map[col] = col.lower().replace(" ", "_") + "_value"
     pivoted = pivoted.rename(columns=rename_map)
 
+    # Join keys used for all merges
+    join_cols = [c for c in ["model", "scenario", "scenario_geography", "year", "Sector", "Technology"] if c in df_filtered.columns and c in pivoted.columns]
+
+    # Unit-aware conversions BEFORE cost merges to ensure correct base columns
+    # 1) Capacity → MW (supports kW/MW/GW)
+    cap_rows = df_filtered[df_filtered["col1"] == "Capacity"]
+    if not cap_rows.empty:
+        cap_df = cap_rows[join_cols + ["value", "unit"]].copy()
+        u = cap_df["unit"].astype(str).str.lower()
+        cap_mw = cap_df["value"].astype(float)
+        cap_mw.loc[u.str.contains("gw")] = cap_mw.loc[u.str.contains("gw")] * 1000.0
+        cap_mw.loc[u.str.contains("mw")] = cap_mw.loc[u.str.contains("mw")] * 1.0
+        cap_mw.loc[u.str.contains("kw")] = cap_mw.loc[u.str.contains("kw")] / 1000.0
+        # Unknown units → leave as-is
+        cap_df["capacity_mw"] = cap_mw
+        cap_df = cap_df.drop(columns=["value", "unit"])\
+                         .groupby(join_cols, as_index=False)["capacity_mw"].first()
+        pivoted = pivoted.merge(cap_df, on=join_cols, how="left")
+        pivoted = pivoted.drop(columns=["capacity_value"], errors="ignore")
+
+    # 2) Capacity Additions → MW/yr (supports kW/yr, MW/yr, GW/yr variants incl. yr-1)
+    add_rows = df_filtered[df_filtered["col1"] == "Capacity Additions"]
+    if not add_rows.empty:
+        add_df = add_rows[join_cols + ["value", "unit"]].copy()
+        u = add_df["unit"].astype(str).str.lower()
+        add_mwyr = add_df["value"].astype(float)
+        gwyr_mask = u.str.contains("gw") & (u.str.contains("/yr") | u.str.contains("yr-1"))
+        mwy_mask = u.str.contains("mw") & (u.str.contains("/yr") | u.str.contains("yr-1"))
+        kwyr_mask = u.str.contains("kw") & (u.str.contains("/yr") | u.str.contains("yr-1"))
+        add_mwyr.loc[gwyr_mask] = add_mwyr.loc[gwyr_mask] * 1000.0
+        add_mwyr.loc[mwy_mask] = add_mwyr.loc[mwy_mask] * 1.0
+        add_mwyr.loc[kwyr_mask] = add_mwyr.loc[kwyr_mask] / 1000.0
+        add_df["capacity_additions_mw_per_yr"] = add_mwyr
+        add_df = add_df.drop(columns=["value", "unit"])\
+                       .groupby(join_cols, as_index=False)["capacity_additions_mw_per_yr"].first()
+        pivoted = pivoted.merge(add_df, on=join_cols, how="left")
+        pivoted = pivoted.drop(columns=["capacity_additions_value"], errors="ignore")
+
+    # 3) Energy (Primary/Secondary) → MWh/yr using per-row units (EJ/PJ/TJ per year)
+    def energy_units_to_mwh(values: pd.Series, unit_str: pd.Series) -> pd.Series:
+        out = values.astype(float).copy()
+        u = unit_str.astype(str).str.lower()
+        ej = u.str.contains("ej")
+        pj = u.str.contains("pj")
+        tj = u.str.contains("tj")
+        out.loc[ej] = out.loc[ej] * (1e18 / 3.6e9)
+        out.loc[pj] = out.loc[pj] * (1e15 / 3.6e9)
+        out.loc[tj] = out.loc[tj] * (1e12 / 3.6e9)
+        return out
+
+    pri_rows = df_filtered[df_filtered["col1"] == "Primary Energy"]
+    if not pri_rows.empty:
+        pri_df = pri_rows[join_cols + ["value", "unit"]].copy()
+        pri_df["primary_energy_mwh_per_yr"] = energy_units_to_mwh(pri_df["value"], pri_df["unit"])\
+            .replace([np.inf, -np.inf], np.nan)
+        pri_df = pri_df.drop(columns=["value", "unit"])\
+                       .groupby(join_cols, as_index=False)["primary_energy_mwh_per_yr"].first()
+        pivoted = pivoted.merge(pri_df, on=join_cols, how="left")
+        pivoted = pivoted.drop(columns=["primary_energy_value"], errors="ignore")
+
+    sec_rows = df_filtered[df_filtered["col1"] == "Secondary Energy"]
+    if not sec_rows.empty:
+        sec_df = sec_rows[join_cols + ["value", "unit"]].copy()
+        sec_df["secondary_energy_mwh_per_yr"] = energy_units_to_mwh(sec_df["value"], sec_df["unit"])\
+            .replace([np.inf, -np.inf], np.nan)
+        sec_df = sec_df.drop(columns=["value", "unit"])\
+                       .groupby(join_cols, as_index=False)["secondary_energy_mwh_per_yr"].first()
+        pivoted = pivoted.merge(sec_df, on=join_cols, how="left")
+        pivoted = pivoted.drop(columns=["secondary_energy_value"], errors="ignore")
+
     # Merge cost metrics from original df (non-pivoted)
     cost_data = df[~df["col1"].isin(target_col1_values)].copy()
+    # refresh join_cols to ensure overlap with cost_data
     join_cols = [c for c in ["model", "scenario", "scenario_geography", "year", "Sector", "Technology"] if c in cost_data.columns and c in pivoted.columns]
 
     def add_cost_metric(pivoted_df: pd.DataFrame, cost_df: pd.DataFrame, metric_name: str, join_cols: List[str]) -> pd.DataFrame:
@@ -511,22 +582,36 @@ def step2_filter_and_pivot() -> None:
         pivoted["lifetime_years"] = pivoted["lifetime_value"]
         pivoted = pivoted.drop(columns=["lifetime_value"], errors="ignore")
 
-    # Cost conversions: enforce MW basis and clean zeros/negatives
+    # Cost conversions: unit-aware to MW or MW/yr; clean zeros/negatives
+    def convert_capacity_cost_to_mw(values: pd.Series, units: Optional[pd.Series], per_year: bool) -> pd.Series:
+        out = values.astype(float).copy()
+        out.loc[out <= 0] = np.nan
+        if units is None:
+            return out
+        u = units.astype(str).str.lower()
+        # Only convert when unit clearly indicates kW vs MW; otherwise leave as-is
+        kw_mask = u.str.contains("kw") & (~u.str.contains("mwh"))
+        mw_mask = u.str.contains("mw") & (~u.str.contains("mwh"))
+        out.loc[kw_mask] = out.loc[kw_mask] * 1000.0
+        out.loc[mw_mask] = out.loc[mw_mask] * 1.0
+        return out
+
     if "om_cost_usd_per_mw_per_yr" in pivoted.columns:
-        # Assume original was per kW/yr if values look small, but keep simple scale-up by 1000 for positives within range
-        mask = (pivoted["om_cost_usd_per_mw_per_yr"] > 0) & (pivoted["om_cost_usd_per_mw_per_yr"] < 1_000_000_000)
-        pivoted.loc[mask, "om_cost_usd_per_mw_per_yr"] = pivoted.loc[mask, "om_cost_usd_per_mw_per_yr"] * 1000.0
-        zero_mask = pivoted["om_cost_usd_per_mw_per_yr"] == 0
-        pivoted.loc[zero_mask, "om_cost_usd_per_mw_per_yr"] = np.nan
+        units = pivoted["om_cost_unit"] if "om_cost_unit" in pivoted.columns else None
+        pivoted["om_cost_usd_per_mw_per_yr"] = convert_capacity_cost_to_mw(
+            pivoted["om_cost_usd_per_mw_per_yr"], units, per_year=True
+        )
 
     if "capital_cost_usd_per_mw" in pivoted.columns:
-        mask = (pivoted["capital_cost_usd_per_mw"] > 0) & (pivoted["capital_cost_usd_per_mw"] < 1_000_000_000)
-        pivoted.loc[mask, "capital_cost_usd_per_mw"] = pivoted.loc[mask, "capital_cost_usd_per_mw"] * 1000.0
-        zero_mask = pivoted["capital_cost_usd_per_mw"] == 0
-        pivoted.loc[zero_mask, "capital_cost_usd_per_mw"] = np.nan
+        units = pivoted["capital_cost_unit"] if "capital_cost_unit" in pivoted.columns else None
+        pivoted["capital_cost_usd_per_mw"] = convert_capacity_cost_to_mw(
+            pivoted["capital_cost_usd_per_mw"], units, per_year=False
+        )
 
-    # Efficiency: convert percent >1 to decimal; Renewables already set to 1.0 above
+    # Efficiency: treat 0 as missing, then convert percent >1 to decimal; Renewables already set to 1.0 above
     if "efficiency_percent" in pivoted.columns:
+        zero_eff_mask = pivoted["efficiency_percent"] == 0
+        pivoted.loc[zero_eff_mask, "efficiency_percent"] = np.nan
         pivoted["efficiency_decimal"] = pivoted["efficiency_percent"]
         percent_mask = pivoted["efficiency_percent"] > 1
         pivoted.loc[percent_mask, "efficiency_decimal"] = pivoted.loc[percent_mask, "efficiency_percent"] / 100.0
@@ -559,30 +644,63 @@ def convert_energy_price_to_mwh(price_value: float, unit: str) -> float:
 
 
 def load_step1_for_price() -> Optional[pd.DataFrame]:
-    try:
-        return pd.read_csv("1_intermediate_AR6_scenario_formatting_ISO3.csv")
-    except FileNotFoundError:
+    frames: List[pd.DataFrame] = []
+    for fname in [
+        "1_intermediate_AR6_scenario_formatting_ISO3.csv",
+        "1_intermediate_AR6_scenario_formatting_R10.csv",
+    ]:
+        try:
+            frames.append(pd.read_csv(fname))
+        except FileNotFoundError:
+            continue
+    if not frames:
         return None
+    return pd.concat(frames, ignore_index=True)
 
 
-def get_price_from_original(step1_df: Optional[pd.DataFrame], model: str, scenario: str, region: str, year: int, col2: str, fuel: Optional[str] = None) -> float:
+def build_price_tables(step1_df: Optional[pd.DataFrame]) -> Dict[str, pd.DataFrame]:
     if step1_df is None:
-        return np.nan
-    mask = (
-        (step1_df["model"] == model)
-        & (step1_df["scenario"] == scenario)
-        & (step1_df["region"] == region)
-        & (step1_df["year"] == year)
-        & (step1_df["col1"] == "Price")
-    )
-    if fuel is not None:
-        mask = mask & (step1_df["Fuel"] == fuel)
-    mask = mask & (step1_df["col2"] == col2)
-    price_rows = step1_df[mask]
-    if len(price_rows) == 0:
-        return np.nan
-    row0 = price_rows.iloc[0]
-    return convert_energy_price_to_mwh(row0["value"], row0["unit"])
+        return {"elec": pd.DataFrame(), "primary": pd.DataFrame(), "secondary_by_fuel": pd.DataFrame()}
+
+    prices = step1_df[step1_df["col1"] == "Price"].copy()
+    if prices.empty:
+        return {"elec": pd.DataFrame(), "primary": pd.DataFrame(), "secondary_by_fuel": pd.DataFrame()}
+
+    # Vectorized price conversion to USD/MWh
+    unit_lower = prices["unit"].astype(str).str.lower()
+    vals = prices["value"].astype(float)
+    converted = vals.copy()
+    gj = unit_lower.str.contains("gj")
+    tj = unit_lower.str.contains("tj")
+    pj = unit_lower.str.contains("pj")
+    ej = unit_lower.str.contains("ej")
+    converted.loc[gj] = vals.loc[gj] * 3.6
+    converted.loc[tj] = vals.loc[tj] * 3.6 * 1_000
+    converted.loc[pj] = vals.loc[pj] * 3.6 * 1_000_000
+    converted.loc[ej] = vals.loc[ej] * 3.6 * 1_000_000_000
+    prices["price_usd_per_mwh"] = converted
+
+    # Electricity (Secondary Energy, Electricity fuel)
+    elec = prices[(prices["col2"] == "Secondary Energy") & (prices["Fuel"] == "Electricity")][[
+        "model", "scenario", "region", "year", "price_usd_per_mwh"
+    ]].copy()
+    elec = elec.groupby(["model", "scenario", "region", "year"], as_index=False)["price_usd_per_mwh"].first()
+
+    # Primary energy (not fuel-specific; take first per group)
+    primary = prices[(prices["col2"] == "Primary Energy")][[
+        "model", "scenario", "region", "year", "price_usd_per_mwh"
+    ]].copy()
+    primary = primary.groupby(["model", "scenario", "region", "year"], as_index=False)["price_usd_per_mwh"].first()
+
+    # Secondary energy by fuel (fuel-specific table)
+    secondary_by_fuel = prices[(prices["col2"] == "Secondary Energy")][[
+        "model", "scenario", "region", "year", "Fuel", "price_usd_per_mwh"
+    ]].copy()
+    secondary_by_fuel = secondary_by_fuel.groupby(
+        ["model", "scenario", "region", "year", "Fuel"], as_index=False
+    )["price_usd_per_mwh"].first()
+
+    return {"elec": elec, "primary": primary, "secondary_by_fuel": secondary_by_fuel}
 
 
 def step3_finalize_target_schema() -> None:
@@ -627,8 +745,9 @@ def step3_finalize_target_schema() -> None:
     target["price_unit"] = "USD/MWh"
     target["price_indicator"] = np.nan
 
-    # scenario_price / fuel_price using step1 original
+    # scenario_price / fuel_price using step1 original (vectorized merges)
     step1_df = load_step1_for_price()
+    price_tables = build_price_tables(step1_df)
 
     # Fuel mapping for fuel_price
     fuel_map = {
@@ -652,64 +771,86 @@ def step3_finalize_target_schema() -> None:
         "OceanCap": "Ocean",
     }
 
-    # Vectorized-ish apply (still row-wise but single pass here)
-    def calc_scenario_price(row) -> float:
-        if row["sector"] in ["Power", "Renewables"]:
-            return get_price_from_original(step1_df, row["scenario_provider"], row["scenario"], row["scenario_geography"], row["scenario_year"], "Secondary Energy", fuel="Electricity")
-        return get_price_from_original(step1_df, row["scenario_provider"], row["scenario"], row["scenario_geography"], row["scenario_year"], "Primary Energy")
+    # Build keys for joins
+    join_key = ["scenario_provider", "scenario", "scenario_geography", "scenario_year"]
+    # Prepare price tables with matching column names
+    elec = price_tables["elec"].rename(columns={
+        "model": "scenario_provider",
+        "scenario": "scenario",
+        "region": "scenario_geography",
+        "year": "scenario_year",
+        "price_usd_per_mwh": "scenario_price_electricity"
+    }) if not price_tables["elec"].empty else pd.DataFrame(columns=join_key + ["scenario_price_electricity"])
 
-    def calc_fuel_price(row) -> float:
-        fuel = fuel_map.get(row["technology"], "Gas")
-        return get_price_from_original(step1_df, row["scenario_provider"], row["scenario"], row["scenario_geography"], row["scenario_year"], "Secondary Energy", fuel=fuel)
+    primary = price_tables["primary"].rename(columns={
+        "model": "scenario_provider",
+        "scenario": "scenario",
+        "region": "scenario_geography",
+        "year": "scenario_year",
+        "price_usd_per_mwh": "scenario_price_primary"
+    }) if not price_tables["primary"].empty else pd.DataFrame(columns=join_key + ["scenario_price_primary"])
 
-    target["scenario_price"] = target.apply(calc_scenario_price, axis=1)
-    target["fuel_price"] = target.apply(calc_fuel_price, axis=1)
+    sec_by_fuel = price_tables["secondary_by_fuel"].rename(columns={
+        "model": "scenario_provider",
+        "scenario": "scenario",
+        "region": "scenario_geography",
+        "year": "scenario_year",
+        "Fuel": "fuel_for_price",
+        "price_usd_per_mwh": "fuel_price"
+    }) if not price_tables["secondary_by_fuel"].empty else pd.DataFrame(columns=join_key + ["fuel_for_price", "fuel_price"])
+
+    # scenario_price: Power/Renewables -> electricity; others -> primary
+    target = target.merge(elec, on=join_key, how="left")
+    target = target.merge(primary, on=join_key, how="left")
+    is_power_like = target["sector"].isin(["Power", "Renewables"]) if "sector" in target.columns else pd.Series(False, index=target.index)
+    target["scenario_price"] = np.where(
+        is_power_like,
+        target["scenario_price_electricity"],
+        target["scenario_price_primary"],
+    )
+    target = target.drop(columns=["scenario_price_electricity", "scenario_price_primary"], errors="ignore")
+
+    # fuel_price: technology → fuel mapping then merge with secondary-by-fuel prices
+    target["fuel_for_price"] = target["technology"].map(fuel_map).fillna("Gas")
+    target = target.merge(sec_by_fuel, on=join_key + ["fuel_for_price"], how="left")
 
     # Pathway logic (Power/Renewables vs Coal/Gas&Oil)
-    # Determine pathway_unit and scenario_pathway from df columns
-    def determine_pathway_unit(idx: int) -> str:
-        has_primary = pd.notna(df.loc[idx, "primary_energy_mwh_per_yr"]) if "primary_energy_mwh_per_yr" in df.columns else False
-        has_secondary = pd.notna(df.loc[idx, "secondary_energy_mwh_per_yr"]) if "secondary_energy_mwh_per_yr" in df.columns else False
-        has_capacity = pd.notna(df.loc[idx, "capacity_mw"]) if "capacity_mw" in df.columns else False
-        if has_primary or has_secondary:
-            return "MWh/yr"
-        if has_capacity:
-            return "MW"
-        return "MWh/yr"
+    # Determine pathway_unit and scenario_pathway from df columns (vectorized)
+    has_primary = df["primary_energy_mwh_per_yr"].notna() if "primary_energy_mwh_per_yr" in df.columns else pd.Series(False, index=df.index)
+    has_secondary = df["secondary_energy_mwh_per_yr"].notna() if "secondary_energy_mwh_per_yr" in df.columns else pd.Series(False, index=df.index)
+    has_capacity = df["capacity_mw"].notna() if "capacity_mw" in df.columns else pd.Series(False, index=df.index)
 
-    target["pathway_unit"] = [determine_pathway_unit(i) for i in range(len(target))]
+    # pathway_unit default MWh/yr, set to MW only where appropriate
+    target["pathway_unit"] = "MWh/yr"
+    idx = (~has_primary & ~has_secondary & has_capacity)
+    if len(target) == len(df):
+        target.loc[idx, "pathway_unit"] = "MW"
 
-    def calc_scenario_pathway(idx: int, sector: str) -> float:
-        primary = df.loc[idx, "primary_energy_mwh_per_yr"] if "primary_energy_mwh_per_yr" in df.columns else np.nan
-        secondary = df.loc[idx, "secondary_energy_mwh_per_yr"] if "secondary_energy_mwh_per_yr" in df.columns else np.nan
-        capacity = df.loc[idx, "capacity_mw"] if "capacity_mw" in df.columns else np.nan
-        if sector in ["Coal", "Gas&Oil"]:
-            return primary
-        if sector in ["Power", "Renewables"]:
-            if pd.notna(secondary):
-                return secondary
-            if pd.notna(capacity):
-                return capacity
-            return np.nan
-        return np.nan
-
-    target["scenario_pathway"] = [
-        calc_scenario_pathway(i, s) for i, s in enumerate(target["sector"])
-    ]
+    # scenario_pathway by sector rules
+    sec_series = target["sector"].astype(str)
+    scenario_pathway = pd.Series(np.nan, index=target.index, dtype=float)
+    if "primary_energy_mwh_per_yr" in df.columns:
+        scenario_pathway = np.where(sec_series.isin(["Coal", "Gas&Oil"]), df["primary_energy_mwh_per_yr"], scenario_pathway)
+    # For Power/Renewables
+    if "secondary_energy_mwh_per_yr" in df.columns:
+        use_secondary = sec_series.isin(["Power", "Renewables"]) & has_secondary
+        scenario_pathway = np.where(use_secondary, df["secondary_energy_mwh_per_yr"], scenario_pathway)
+    if "capacity_mw" in df.columns:
+        use_capacity = sec_series.isin(["Power", "Renewables"]) & ~has_secondary & has_capacity
+        scenario_pathway = np.where(use_capacity, df["capacity_mw"], scenario_pathway)
+    target["scenario_pathway"] = scenario_pathway
 
     # Capacity factor (Power/Renewables only): secondary_energy / (capacity * 8760)
-    def calc_capacity_factor(idx: int, sector: str) -> float:
-        if sector not in ["Power", "Renewables"]:
-            return np.nan
-        secondary = df.loc[idx, "secondary_energy_mwh_per_yr"] if "secondary_energy_mwh_per_yr" in df.columns else np.nan
-        capacity = df.loc[idx, "capacity_mw"] if "capacity_mw" in df.columns else np.nan
-        if pd.notna(secondary) and pd.notna(capacity) and capacity > 0:
-            return secondary / (capacity * 8760)
-        return np.nan
-
-    target["scenario_capacity_factor"] = [
-        calc_capacity_factor(i, s) for i, s in enumerate(target["sector"])
-    ]
+    if "secondary_energy_mwh_per_yr" in df.columns and "capacity_mw" in df.columns:
+        denom = df["capacity_mw"] * 8760.0
+        cf = np.where(
+            sec_series.isin(["Power", "Renewables"]) & df["secondary_energy_mwh_per_yr"].notna() & df["capacity_mw"].notna() & (df["capacity_mw"] > 0),
+            df["secondary_energy_mwh_per_yr"] / denom,
+            np.nan,
+        )
+        target["scenario_capacity_factor"] = cf
+    else:
+        target["scenario_capacity_factor"] = np.nan
     target["scenario_capacity_factor"] = target["scenario_capacity_factor"].clip(0, 1)
 
     # Geography → ISO2 list mapping
@@ -963,10 +1104,113 @@ def step4_aggregate_and_gapfill() -> None:
         print("❌ Missing technology_mapping.csv — aborting step 4")
         return
 
-    # Vectorized mapping
+    # Vectorized mapping from mapping file (first pass)
     df_map = vectorized_mapping(df, mapping_df)
     df_map["sector"] = df_map["target_sector"]
     df_map["technology"] = df_map["target_technology"]
+
+    # Enforce canonical final targets
+    FINAL_TARGETS: set[tuple[str, str]] = {
+        ("Coal", "Coal"),
+        ("Oil&Gas", "Oil"),
+        ("Oil&Gas", "Gas"),
+        ("Power", "SolarCap"),
+        ("Power", "CoalCap"),
+        ("Power", "GasCap"),
+        ("Power", "OilCap"),
+        ("Power", "BiomassCap"),
+        ("Power", "WindCap"),
+        ("Power", "HydroCap"),
+        ("Power", "NuclearCap"),
+        ("Power", "GeothermalCap"),
+        ("Steel", "BF-BOF"),
+        ("Steel", "DRI-BOF"),
+        ("Steel", "EAF"),
+    }
+
+    def canonicalize_to_final_targets(df_in: pd.DataFrame) -> pd.DataFrame:
+        dfc = df_in.copy()
+        sec = dfc["sector"].astype(str).str.lower()
+        tech = dfc["technology"].astype(str).str.lower()
+
+        # Start with identity
+        sec_out = dfc["sector"].astype(str).copy()
+        tech_out = dfc["technology"].astype(str).copy()
+
+        # Normalize sector names first
+        sec_out = sec_out.mask(sec.isin(["gas&oil", "oil&gas"]), "Oil&Gas")
+
+        # Coal sector → (Coal, Coal)
+        coal_mask = sec.eq("coal")
+        sec_out = sec_out.mask(coal_mask, "Coal")
+        tech_out = tech_out.mask(coal_mask, "Coal")
+
+        # Oil&Gas sector → tech either Oil or Gas
+        og_mask = sec.isin(["oil&gas", "gas&oil"]) | sec_out.eq("Oil&Gas")
+        gas_mask = og_mask & (tech.str.contains("gas"))
+        oil_mask = og_mask & (tech.str.contains("oil"))
+        sec_out = sec_out.mask(og_mask, "Oil&Gas")
+        tech_out = tech_out.mask(gas_mask, "Gas")
+        tech_out = tech_out.mask(oil_mask, "Oil")
+
+        # Power-like sectors (Power, Renewables, Nuclear → Power)
+        power_like = sec.isin(["power", "renewables", "nuclear"]) | sec_out.isin(["Power", "Renewables", "Nuclear"])
+        sec_out = sec_out.mask(power_like, "Power")
+
+        # Map power technologies to Cap variants
+        def map_power_tech(name: str) -> str:
+            n = name.lower()
+            if any(k in n for k in ["solar", "pv", "csp"]):
+                return "SolarCap"
+            if "wind" in n:
+                return "WindCap"
+            if "hydro" in n:
+                return "HydroCap"
+            if "nuclear" in n:
+                return "NuclearCap"
+            if "geothermal" in n:
+                return "GeothermalCap"
+            if any(k in n for k in ["biomass", "bio"]):
+                return "BiomassCap"
+            if "coal" in n:
+                return "CoalCap"
+            if "gas" in n:
+                return "GasCap"
+            if "oil" in n:
+                return "OilCap"
+            return name
+
+        power_idx = power_like[power_like].index
+        tech_out.loc[power_idx] = tech_out.loc[power_idx].apply(map_power_tech)
+
+        # Steel mapping to 3 categories
+        steel_mask = sec.eq("steel") | sec_out.eq("Steel")
+        def map_steel_tech(name: str) -> str:
+            n = name.lower()
+            if "dri" in n:
+                return "DRI-BOF"
+            if "eaf" in n:
+                return "EAF"
+            # default steel route
+            return "BF-BOF"
+
+        steel_idx = steel_mask[steel_mask].index
+        sec_out = sec_out.mask(steel_mask, "Steel")
+        tech_out.loc[steel_idx] = tech_out.loc[steel_idx].apply(map_steel_tech)
+
+        # Apply canonical
+        dfc["sector"] = sec_out
+        dfc["technology"] = tech_out
+
+        # Filter to final allowed set
+        pair = list(zip(dfc["sector"], dfc["technology"]))
+        keep = [p in FINAL_TARGETS for p in pair]
+        return dfc.loc[keep].copy()
+
+    before_rows = len(df_map)
+    df_map = canonicalize_to_final_targets(df_map)
+    after_rows = len(df_map)
+    print(f"Canonical targets: kept {after_rows:,}/{before_rows:,} rows")
 
     # Grouping keys
     grouping_cols = [
