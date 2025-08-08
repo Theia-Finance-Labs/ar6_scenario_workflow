@@ -1233,6 +1233,7 @@ def step4_aggregate_and_gapfill() -> None:
         c
         for c in [
             "scenario_price",
+            "fuel_price",
             "scenario_capacity_factor",
             "lifetime_years",
             "efficiency_decimal",
@@ -1307,6 +1308,7 @@ def step4_aggregate_and_gapfill() -> None:
         "price_unit",
         "price_indicator",
         "scenario_price",
+        "fuel_price",
         "pathway_unit",
         "scenario_pathway",
         "scenario_capacity_factor",
