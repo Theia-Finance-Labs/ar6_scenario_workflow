@@ -5,11 +5,13 @@ This script processes AR6 climate scenario data to extract cost metrics and pric
 It replicates the functionality of a dbt SQL pipeline in Python.
 
 Input files:
-- AR6_Scenarios_Database_ISO3_v1.1.csv: Main AR6 scenario database
+- AR6_Scenarios_Database_ISO3_v1.1.feather: Main AR6 scenario database (country-level)
+- AR6_Scenarios_Database_R10_regions_v1.1.feather: AR6 regional data (R10 regions)
 - ar6_variables_with_mapping.csv: Variable mappings for sectors/technologies
 
 Output:
-- AR6_scenario_with_costs_and_prices.csv: Processed data with cost metrics and price data
+- 1_intermediate_AR6_scenario_formatting_ISO3.csv: Processed ISO3 data 
+- 1_intermediate_AR6_scenario_formatting_R10.csv: Processed R10 data
 
 The pipeline:
 1. Loads and melts AR6 data from wide to long format
@@ -20,27 +22,42 @@ The pipeline:
 6. Outputs final dataset with 30+ columns
 """
 
-import pandas as pd
+import modin.pandas as pd
 import numpy as np
+
+# =============================================================================
+# CONFIGURATION - Set which dataset to process
+# =============================================================================
+
+# Change this to process different datasets
+DATASET_TYPE = "ISO3"  # Options: "ISO3" or "R10"
+
+if DATASET_TYPE == "ISO3":
+    INPUT_FILE = "AR6_Scenarios_Database_ISO3_v1.1.feather"
+    OUTPUT_FILE = "1_intermediate_AR6_scenario_formatting_ISO3.csv"
+elif DATASET_TYPE == "R10":
+    INPUT_FILE = "AR6_Scenarios_Database_R10_regions_v1.1.feather"
+    OUTPUT_FILE = "1_intermediate_AR6_scenario_formatting_R10.csv"
+else:
+    raise ValueError("DATASET_TYPE must be 'ISO3' or 'R10'")
+
+print("=" * 80)
+print("AR6 CLIMATE SCENARIO DATA PROCESSING PIPELINE")
+print("=" * 80)
+print(f"Processing: {DATASET_TYPE} dataset")
+print(f"Input: {INPUT_FILE}")
+print(f"Output: {OUTPUT_FILE}")
 
 ## =============================================================================
 ## DATA LOADING AND PREPARATION
 ## =============================================================================
 
 print("Loading input files...")
-source = pd.read_feather("AR6_Scenarios_Database_ISO3_v1.1.feather")
+source = pd.read_feather(INPUT_FILE)
 excel_mapping = pd.read_csv("ar6_variables_with_mapping.csv")
 
 print(f"AR6 data shape: {source.shape}")
 print(f"Mapping data shape: {excel_mapping.shape}")
-
-# Uncomment the lines below to test with a single model-scenario combination
-# print("Filtering to Model-Scenario combination with most cost data for testing...")
-# best_model = "POLES GECO2019"
-# best_scenario = "NDCMCS"
-# print(f"Using Model: {best_model}, Scenario: {best_scenario}")
-# source = source[(source['Model'] == best_model) & (source['Scenario'] == best_scenario)]
-# print(f"Filtered AR6 data shape: {source.shape}")
 
 ## =============================================================================
 ## DATA TRANSFORMATION: WIDE TO LONG FORMAT
@@ -48,7 +65,24 @@ print(f"Mapping data shape: {excel_mapping.shape}")
 
 print("Melting AR6 data from wide to long format...")
 id_cols = ['Model', 'Scenario', 'Region', 'Variable', 'Unit']
-year_cols = [col for col in source.columns if col not in id_cols]
+
+# Filter year columns to only include years > 2020 BEFORE melting (major memory savings)
+all_year_cols = [col for col in source.columns if col not in id_cols]
+print(f"Total year columns found: {len(all_year_cols)}")
+
+# Convert column names to numeric and filter for years > 2020
+year_cols = []
+for col in all_year_cols:
+    try:
+        year = float(col)
+        if year > 2020 and year <= 2050:
+            year_cols.append(col)
+    except ValueError:
+        # Skip non-numeric column names
+        continue
+
+print(f"Year columns for analysis (2021-2050): {len(year_cols)} columns")
+print(f"Year range: {min([float(col) for col in year_cols])}-{max([float(col) for col in year_cols])}")
 
 # Melt the data (years are columns, need to convert to rows)
 melted = pd.melt(source, 
@@ -59,12 +93,8 @@ melted = pd.melt(source,
 
 # Data cleaning: convert types and filter out missing/invalid values
 melted['Year'] = pd.to_numeric(melted['Year'], errors='coerce')
-melted = melted.dropna(subset=['Year', 'Value'])
-melted = melted[melted['Value'] != '']
-
-# Clean extreme values that are likely data errors (e.g., -2.08e+32)
+# Removed filtering - keep all data including missing values and extreme values
 melted['Value'] = pd.to_numeric(melted['Value'], errors='coerce')
-melted = melted[(melted['Value'].abs() <= 1e10) | melted['Value'].isna()]
 
 print(f"Melted data shape: {melted.shape}")
 
@@ -90,11 +120,37 @@ print("Joining with mapping data...")
 base_data = (
     renamed
     .merge(excel_mapping, how="left", left_on="variable", right_on="variable")
-    .dropna(subset=['value'])
-    .drop_duplicates()
+    # Removed dropna and drop_duplicates filtering - keep all data
 )
 
 print(f"Base data shape after join: {base_data.shape}")
+
+# Filter out rows where Sector is NA (unmapped variables)
+print("Filtering out rows with missing Sector mapping...")
+initial_rows = len(base_data)
+base_data = base_data[base_data["Sector"].notna()].copy()
+final_rows = len(base_data)
+removed_rows = initial_rows - final_rows
+
+print(f"   Before Sector filtering: {initial_rows:,} rows")
+print(f"   After Sector filtering: {final_rows:,} rows")
+print(f"   Removed {removed_rows:,} rows ({removed_rows/initial_rows*100:.1f}%) with missing Sector mapping")
+
+print(f"   Available sectors: {sorted(base_data['Sector'].unique())}")
+
+# Filter for only target sectors of interest
+print("Filtering for target sectors only...")
+target_sectors = ["Steel", "Nuclear", "Gas&Oil", "Cement", "Coal", "Renewables", "Power"]
+initial_rows_sector = len(base_data)
+base_data = base_data[base_data["Sector"].isin(target_sectors)].copy()
+final_rows_sector = len(base_data)
+removed_rows_sector = initial_rows_sector - final_rows_sector
+
+print(f"   Before target sector filtering: {initial_rows_sector:,} rows")
+print(f"   After target sector filtering: {final_rows_sector:,} rows")
+print(f"   Removed {removed_rows_sector:,} rows ({removed_rows_sector/initial_rows_sector*100:.1f}%) from non-target sectors")
+
+print(f"   Final sectors: {sorted(base_data['Sector'].unique())}")
 
 ## =============================================================================
 ## COST METRICS EXTRACTION
@@ -155,22 +211,10 @@ print(f"Merged data shape: {merged.shape}")
 ## =============================================================================
 
 print("Filtering for rows with cost metrics...")
-# Keep only rows where all three cost metrics have values (or efficiency is renewable)
-filtered = merged[
-    (merged["om_cost"].notna()) & (merged["om_cost"] != "") &
-    (merged["capital_cost"].notna()) & (merged["capital_cost"] != "") &
-    (
-        (merged["efficiency"].notna() & (merged["efficiency"] != "")) |
-        (merged["Sector"] == "Renewables")
-    )
-]
+# Removed cost completeness filtering - keep all rows regardless of cost data availability
+filtered = merged.copy()
 
 print(f"Filtered data shape: {filtered.shape}")
-
-# Business rule: Set efficiency for Renewables to 100%
-filtered = filtered.copy()
-filtered.loc[filtered["Sector"] == "Renewables", "efficiency"] = "100"
-filtered.loc[filtered["Sector"] == "Renewables", "efficiency_unit"] = "%"
 
 ## =============================================================================
 ## PRICE DATA PROCESSING
@@ -184,7 +228,7 @@ print(f"Price rows found: {len(price_rows)}")
 if not price_rows.empty:
     # Clean and prepare price data
     price_rows = price_rows[["model", "scenario", "region", "year", "Fuel", "col2", "value", "unit"]].copy()
-    price_rows = price_rows.dropna(subset=["col2", "value"])
+    # Removed dropna filtering - keep all price data
     price_rows = price_rows.rename(columns={"col2": "energy_type", "value": "price"})
     
     print(f"Price rows after cleaning: {len(price_rows)}")
@@ -203,82 +247,51 @@ if not price_rows.empty:
     # Start with filtered cost data
     final = filtered.copy()
     
-    # 1. FUEL-SPECIFIC PRIMARY ENERGY PRICES
+    # 1. FUEL-SPECIFIC PRIMARY ENERGY PRICES (Memory-Optimized)
     # Maps the primary energy price for whatever fuel is in the 'Fuel' column
     if not primary_prices.empty:
         print("Processing primary energy prices...")
         
-        # Pivot prices and units by fuel type
-        primary_pivot = primary_prices.pivot_table(
-            index=["model", "scenario", "region", "year"],
-            columns="Fuel", values="price", aggfunc="first"
-        ).reset_index()
+        # Memory-efficient approach: direct merge instead of pivot
+        # Prepare price data with clean column names
+        primary_clean = primary_prices[["model", "scenario", "region", "year", "Fuel", "price", "unit"]].copy()
+        primary_clean = primary_clean.rename(columns={"price": "primary_energy_price", "unit": "primary_energy_price_unit"})
         
-        primary_units_pivot = primary_prices.pivot_table(
-            index=["model", "scenario", "region", "year"], 
-            columns="Fuel", values="unit", aggfunc="first"
-        ).reset_index()
+        # Removed extreme value filtering - keep all price data
         
-        # Efficient vectorized function to map fuel-specific prices
-        def get_fuel_price_and_unit(df, price_pivot, units_pivot, price_col_name, unit_col_name):
-            # Merge price data
-            merged = df.merge(price_pivot, on=["model", "scenario", "region", "year"], how="left")
-            merged = merged.merge(units_pivot, on=["model", "scenario", "region", "year"], how="left", suffixes=('', '_unit'))
-            
-            # Map fuel-specific prices using vectorized operations
-            price_values = []
-            unit_values = []
-            
-            for _, row in merged.iterrows():
-                fuel = row["Fuel"]
-                if pd.isna(fuel) or fuel == "" or fuel not in price_pivot.columns:
-                    price_values.append(np.nan)
-                    unit_values.append(np.nan)
-                else:
-                    price_val = row[fuel] if fuel in merged.columns else np.nan
-                    unit_val = row[f"{fuel}_unit"] if f"{fuel}_unit" in merged.columns else np.nan
-                    
-                    # Filter extreme values (data errors)
-                    if pd.notna(price_val) and abs(price_val) <= 1e10:
-                        price_values.append(price_val)
-                        unit_values.append(unit_val)
-                    else:
-                        price_values.append(np.nan)
-                        unit_values.append(unit_val)
-            
-            return price_values, unit_values
-        
-        price_vals, unit_vals = get_fuel_price_and_unit(
-            final, primary_pivot, primary_units_pivot, 
-            "primary_energy_price", "primary_energy_price_unit"
+        # Merge directly on matching fuel
+        final = final.merge(
+            primary_clean, 
+            on=["model", "scenario", "region", "year", "Fuel"], 
+            how="left"
         )
-        final["primary_energy_price"] = price_vals
-        final["primary_energy_price_unit"] = unit_vals
+        
+        print(f"     ✅ Added primary energy prices: {final['primary_energy_price'].notna().sum():,} values")
+        
     else:
         final["primary_energy_price"] = np.nan
         final["primary_energy_price_unit"] = np.nan
     
-    # 2. FUEL-SPECIFIC SECONDARY ENERGY PRICES  
+    # 2. FUEL-SPECIFIC SECONDARY ENERGY PRICES (Memory-Optimized)
     # Maps the secondary energy price for whatever fuel is in the 'Fuel' column
     if not secondary_prices.empty:
         print("Processing secondary energy prices...")
         
-        secondary_pivot = secondary_prices.pivot_table(
-            index=["model", "scenario", "region", "year"],
-            columns="Fuel", values="price", aggfunc="first"
-        ).reset_index()
+        # Memory-efficient approach: direct merge instead of pivot
+        secondary_clean = secondary_prices[["model", "scenario", "region", "year", "Fuel", "price", "unit"]].copy()
+        secondary_clean = secondary_clean.rename(columns={"price": "secondary_energy_price", "unit": "secondary_energy_price_unit"})
         
-        secondary_units_pivot = secondary_prices.pivot_table(
-            index=["model", "scenario", "region", "year"],
-            columns="Fuel", values="unit", aggfunc="first"
-        ).reset_index()
+        # Removed extreme value filtering - keep all price data
         
-        price_vals, unit_vals = get_fuel_price_and_unit(
-            final, secondary_pivot, secondary_units_pivot,
-            "secondary_energy_price", "secondary_energy_price_unit"
+        # Merge directly on matching fuel
+        final = final.merge(
+            secondary_clean, 
+            on=["model", "scenario", "region", "year", "Fuel"], 
+            how="left"
         )
-        final["secondary_energy_price"] = price_vals
-        final["secondary_energy_price_unit"] = unit_vals
+        
+        print(f"     ✅ Added secondary energy prices: {final['secondary_energy_price'].notna().sum():,} values")
+        
     else:
         final["secondary_energy_price"] = np.nan
         final["secondary_energy_price_unit"] = np.nan
@@ -356,6 +369,27 @@ else:
     final = filtered.copy()
 
 ## =============================================================================
+## PRICE DATA FILTERING (CRITICAL FOR COMPLETE DATASETS)
+## =============================================================================
+print("\n🎯 PRICE DATA FILTERING REMOVED...")
+print("   Keeping all rows regardless of price data completeness")
+
+initial_rows = len(final)
+print(f"   Total rows: {initial_rows:,} rows")
+
+# Removed all price filtering - keep all data regardless of price completeness
+final_rows = len(final)
+
+print(f"   No rows removed - all data retained")
+
+# Report remaining data by sector
+print("   Data by sector (no filtering applied):")
+for sector in sorted(final["Sector"].unique()):
+    sector_count = len(final[final["Sector"] == sector])
+    sector_models = final[final["Sector"] == sector]["model"].nunique()
+    print(f"     📊 {sector}: {sector_count:,} rows from {sector_models} models")
+
+## =============================================================================
 ## FINAL OUTPUT PREPARATION
 ## =============================================================================
 
@@ -388,9 +422,8 @@ print(f"Final output shape: {final.shape}")
 print(f"Final columns: {len(final_cols)}")
 
 # Output to CSV
-output_file = "1_intermediate_AR6_scenario_formatting.csv"
-final.to_csv(output_file,index=False)
-print(f"Output written to {output_file}")
+final.to_csv(OUTPUT_FILE, index=False)
+print(f"Output written to {OUTPUT_FILE}")
 
 ## =============================================================================
 ## SUMMARY AND VALIDATION
@@ -400,26 +433,12 @@ print("\n" + "="*60)
 print("PROCESSING SUMMARY")
 print("="*60)
 
+print(f"Dataset: {DATASET_TYPE}")
 print(f"Final dataset: {len(final):,} rows × {len(final.columns)} columns")
 print(f"Unique models: {final['model'].nunique()}")
 print(f"Unique scenarios: {final['scenario'].nunique()}")
 print(f"Unique regions: {final['region'].nunique()}")
 print(f"Year range: {final['year'].min()}-{final['year'].max()}")
-
-# Show sample of final data
-print("\nSample of final data:")
-print(final[["model", "scenario", "region", "Sector", "Technology", "year", "om_cost", "capital_cost"]].head())
-
-# Show price data sample if available
-price_cols = [col for col in final.columns if 'price' in col and not col.endswith('_unit')]
-if price_cols:
-    sample_with_prices = final.dropna(subset=price_cols, how='all').head()
-    if not sample_with_prices.empty:
-        print(f"\nSample rows with price data:")
-        display_cols = ["model", "scenario", "Fuel", "year"] + price_cols[:3]  # Show first 3 price columns
-        print(sample_with_prices[display_cols])
-    else:
-        print("\nNo rows found with price data")
 
 print("\n" + "="*60)
 print("PROCESSING COMPLETE!")

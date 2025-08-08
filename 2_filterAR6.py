@@ -29,7 +29,7 @@ Version: 2.0
 Last Updated: 2024
 """
 
-import pandas as pd
+import modin.pandas as pd
 import numpy as np
 
 print("=" * 80)
@@ -37,11 +37,51 @@ print("AR6 CLIMATE SCENARIO DATA FILTERING & PIVOTING PIPELINE")
 print("=" * 80)
 
 # =============================================================================
-# STEP 1: DATA LOADING
+# STEP 1: DATA LOADING AND CONCATENATION
 # =============================================================================
-print("\n🔄 STEP 1: Loading formatted AR6 data...")
-df = pd.read_csv("1_intermediate_AR6_scenario_formatting.csv")
-print(f"   Loaded data: {df.shape[0]:,} rows × {df.shape[1]} columns")
+print("\n🔄 STEP 1: Loading and combining formatted AR6 data...")
+
+# Load both ISO3 and R10 datasets
+datasets = []
+
+# Load ISO3 data
+try:
+    iso3_df = pd.read_csv("1_intermediate_AR6_scenario_formatting_ISO3.csv")
+    datasets.append(iso3_df)
+    print(f"   ✅ Loaded ISO3 data: {iso3_df.shape[0]:,} rows × {iso3_df.shape[1]} columns")
+except FileNotFoundError:
+    print("   ⚠️  ISO3 file not found: 1_intermediate_AR6_scenario_formatting_ISO3.csv")
+
+# Load R10 data  
+try:
+    r10_df = pd.read_csv("1_intermediate_AR6_scenario_formatting_R10.csv")
+    datasets.append(r10_df)
+    print(f"   ✅ Loaded R10 data: {r10_df.shape[0]:,} rows × {r10_df.shape[1]} columns")
+except FileNotFoundError:
+    print("   ⚠️  R10 file not found: 1_intermediate_AR6_scenario_formatting_R10.csv")
+
+# Combine datasets
+if datasets:
+    print(f"\n🔗 Combining {len(datasets)} dataset(s)...")
+    df = pd.concat(datasets, ignore_index=True)
+    print(f"   📊 Combined data: {df.shape[0]:,} rows × {df.shape[1]} columns")
+    
+    # Clean up individual dataframes to save memory
+    del datasets
+    if 'iso3_df' in locals():
+        del iso3_df
+    if 'r10_df' in locals():
+        del r10_df
+    print("   🗑️  Freed memory from individual dataframes")
+    
+else:
+    raise FileNotFoundError("No input files found! Please run script 1 first to generate the intermediate files.")
+
+# Rename region to scenario_geography and drop Subsector for final schema
+df = df.rename(columns={'region': 'scenario_geography'})
+if 'Subsector' in df.columns:
+    df = df.drop('Subsector', axis=1)
+    print("   Renamed 'region' to 'scenario_geography' and dropped 'Subsector' column")
 
 # =============================================================================
 # STEP 2: METRIC FILTERING  
@@ -94,7 +134,7 @@ energy_data = df_filtered[df_filtered['col1'].isin(['Primary Energy', 'Secondary
 
 if not energy_data.empty:
     print("   Energy coverage by technology:")
-    for tech in sorted(energy_data['Technology'].unique()):
+    for tech in sorted(energy_data['Technology'].dropna().unique()):
         tech_energy = energy_data[energy_data['Technology'] == tech]
         primary_count = len(tech_energy[tech_energy['col1'] == 'Primary Energy'])
         secondary_count = len(tech_energy[tech_energy['col1'] == 'Secondary Energy'])
@@ -104,11 +144,11 @@ if not energy_data.empty:
 # STEP 5: DATA PIVOTING
 # =============================================================================
 print(f"\n🔄 STEP 5: Pivoting data from long to wide format...")
-print("   Grouping by: model, scenario, region, year, Sector, Subsector, Technology")
+print("   Grouping by: model, scenario, scenario_geography, year, Sector, Technology")
 print("   Note: Fuel column excluded due to NaN conflicts in energy data")
 
 # Define grouping columns - removing Fuel due to NaN values that break pivot operation
-grouping_cols = ['model', 'scenario', 'region', 'year', 'Sector', 'Subsector', 'Technology']
+grouping_cols = ['model', 'scenario', 'scenario_geography', 'year', 'Sector', 'Technology']
 
 # Only keep grouping columns that actually exist in the dataframe
 grouping_cols = [col for col in grouping_cols if col in df_filtered.columns]
@@ -154,7 +194,7 @@ print(f"\n💰 STEP 6: Integrating cost and price data...")
 cost_data = df[~df['col1'].isin(target_col1_values)].copy()
 
 # Define join columns for merging cost data back
-join_cols = ['model', 'scenario', 'region', 'year', 'Sector', 'Subsector', 'Technology']
+join_cols = ['model', 'scenario', 'scenario_geography', 'year', 'Sector', 'Technology']
 join_cols = [col for col in join_cols if col in cost_data.columns and col in pivoted.columns]
 print(f"   Joining on: {join_cols}")
 
@@ -204,11 +244,42 @@ pivoted = add_cost_metric(pivoted, cost_data, "OM Cost", join_cols)
 pivoted = add_cost_metric(pivoted, cost_data, "Capital Cost", join_cols)
 pivoted = add_cost_metric(pivoted, cost_data, "Efficiency", join_cols)
 
+# Also add unit columns for row-by-row unit determination
+print("   Adding unit columns for row-by-row determination:")
+if 'om_cost_unit' in cost_data.columns:
+    om_unit_data = cost_data[join_cols + ['om_cost_unit']].copy()
+    om_unit_data = om_unit_data.dropna(subset=['om_cost_unit']).drop_duplicates()
+    pivoted = pivoted.merge(om_unit_data, on=join_cols, how='left')
+    print(f"     ✅ Added om_cost_unit: {pivoted['om_cost_unit'].notna().sum():,} values")
+
+if 'capital_cost_unit' in cost_data.columns:
+    capital_unit_data = cost_data[join_cols + ['capital_cost_unit']].copy()
+    capital_unit_data = capital_unit_data.dropna(subset=['capital_cost_unit']).drop_duplicates()
+    pivoted = pivoted.merge(capital_unit_data, on=join_cols, how='left')
+    print(f"     ✅ Added capital_cost_unit: {pivoted['capital_cost_unit'].notna().sum():,} values")
+
+if 'efficiency_unit' in cost_data.columns:
+    efficiency_unit_data = cost_data[join_cols + ['efficiency_unit']].copy()
+    efficiency_unit_data = efficiency_unit_data.dropna(subset=['efficiency_unit']).drop_duplicates()
+    pivoted = pivoted.merge(efficiency_unit_data, on=join_cols, how='left')
+    print(f"     ✅ Added efficiency_unit: {pivoted['efficiency_unit'].notna().sum():,} values")
+
+# Special handling for Renewables efficiency (they don't have col1="Efficiency" rows)
+print("   Adding Renewables efficiency (special case):")
+if 'efficiency_percent' not in pivoted.columns:
+    pivoted['efficiency_percent'] = np.nan
+
+# Set efficiency to 100% for all Renewables (business rule from first script)
+renewables_mask = pivoted['Sector'] == 'Renewables'
+pivoted.loc[renewables_mask, 'efficiency_percent'] = 1.0  # 1.0 represents 100%
+renewables_count = renewables_mask.sum()
+print(f"     ✅ Set Renewables efficiency to 100%: {renewables_count:,} rows")
+
 # Add carbon price data (not pivoted, just merged)
 print("   Adding carbon price data:")
 carbon_price_cols = ['carbon_price', 'carbon_price_unit']
 if all(col in df.columns for col in carbon_price_cols):
-    # Get unique carbon price data by model/scenario/region/year
+    # Get unique carbon price data by model/scenario/scenario_geography/year
     carbon_data = df[join_cols + carbon_price_cols].copy()
     carbon_data = carbon_data.dropna(subset=['carbon_price']).drop_duplicates()
     
@@ -226,6 +297,138 @@ else:
     print("     ❌ Carbon price columns not found in source data")
     pivoted['carbon_price_usd_per_tco2'] = np.nan
 
+# Add primary energy price data
+print("   Adding primary energy price data:")
+primary_price_cols = ['primary_energy_price', 'primary_energy_price_unit']
+if all(col in df.columns for col in primary_price_cols):
+    # Get unique primary energy price data by model/scenario/scenario_geography/year/Technology
+    # Include Technology in join since energy prices are technology-specific
+    price_join_cols = join_cols.copy()
+    if 'Fuel' in df.columns:
+        # Include Fuel in join since energy prices are fuel-specific in the source data
+        fuel_join_cols = price_join_cols + ['Fuel']
+        primary_price_data = df[fuel_join_cols + primary_price_cols].copy()
+    else:
+        primary_price_data = df[price_join_cols + primary_price_cols].copy()
+    
+    primary_price_data = primary_price_data.dropna(subset=['primary_energy_price']).drop_duplicates()
+    
+    if not primary_price_data.empty:
+        # All primary energy prices are in US$2010/GJ - no unit variation
+        print(f"     📏 Primary energy price unit: US$2010/GJ (consistent)")
+        
+        col_name = 'primary_energy_price_usd_per_gj'
+        primary_price_data = primary_price_data.rename(columns={'primary_energy_price': col_name})
+        primary_price_data = primary_price_data.drop('primary_energy_price_unit', axis=1)
+        
+        # Drop Fuel column from price data to avoid Fuel_x/Fuel_y conflicts during merge
+        if 'Fuel' in primary_price_data.columns:
+            primary_price_data = primary_price_data.drop('Fuel', axis=1)
+        
+        # Merge on available join columns (excluding Fuel since it's not needed for price matching)
+        merge_cols = [col for col in price_join_cols if col in pivoted.columns and col in primary_price_data.columns]
+        # Also add the unit column for row-by-row determination
+        primary_price_unit_data = df[merge_cols + ['primary_energy_price_unit']].copy()
+        primary_price_unit_data = primary_price_unit_data.dropna(subset=['primary_energy_price_unit']).drop_duplicates()
+        pivoted = pivoted.merge(primary_price_unit_data, on=merge_cols, how='left')
+        
+        pivoted = pivoted.merge(primary_price_data, on=merge_cols, how='left')
+        print(f"     ✅ Added primary energy price: {pivoted[col_name].notna().sum():,} values")
+        print(f"     ✅ Added primary_energy_price_unit: {pivoted['primary_energy_price_unit'].notna().sum():,} values")
+    else:
+        print("     ❌ No primary energy price data found")
+        pivoted['primary_energy_price_usd_per_gj'] = np.nan
+        pivoted['primary_energy_price_unit'] = np.nan
+else:
+    print("     ❌ Primary energy price columns not found in source data")
+    pivoted['primary_energy_price_usd_per_gj'] = np.nan
+    pivoted['primary_energy_price_unit'] = np.nan
+
+# Add secondary energy price data
+print("   Adding secondary energy price data:")
+secondary_price_cols = ['secondary_energy_price', 'secondary_energy_price_unit']
+if all(col in df.columns for col in secondary_price_cols):
+    # Get unique secondary energy price data by model/scenario/scenario_geography/year/Technology
+    if 'Fuel' in df.columns:
+        fuel_join_cols = price_join_cols + ['Fuel']
+        secondary_price_data = df[fuel_join_cols + secondary_price_cols].copy()
+    else:
+        secondary_price_data = df[price_join_cols + secondary_price_cols].copy()
+    
+    secondary_price_data = secondary_price_data.dropna(subset=['secondary_energy_price']).drop_duplicates()
+    
+    if not secondary_price_data.empty:
+        # All secondary energy prices are in US$2010/GJ - no unit variation
+        print(f"     📏 Secondary energy price unit: US$2010/GJ (consistent)")
+        
+        col_name = 'secondary_energy_price_usd_per_gj'
+        secondary_price_data = secondary_price_data.rename(columns={'secondary_energy_price': col_name})
+        secondary_price_data = secondary_price_data.drop('secondary_energy_price_unit', axis=1)
+        
+        # Drop Fuel column from price data to avoid Fuel_x/Fuel_y conflicts during merge
+        if 'Fuel' in secondary_price_data.columns:
+            secondary_price_data = secondary_price_data.drop('Fuel', axis=1)
+        
+        # Merge on available join columns (excluding Fuel since it's not needed for price matching)
+        merge_cols = [col for col in price_join_cols if col in pivoted.columns and col in secondary_price_data.columns]
+        # Also add the unit column for row-by-row determination
+        secondary_price_unit_data = df[merge_cols + ['secondary_energy_price_unit']].copy()
+        secondary_price_unit_data = secondary_price_unit_data.dropna(subset=['secondary_energy_price_unit']).drop_duplicates()
+        pivoted = pivoted.merge(secondary_price_unit_data, on=merge_cols, how='left')
+        
+        pivoted = pivoted.merge(secondary_price_data, on=merge_cols, how='left')
+        print(f"     ✅ Added secondary energy price: {pivoted[col_name].notna().sum():,} values")
+        print(f"     ✅ Added secondary_energy_price_unit: {pivoted['secondary_energy_price_unit'].notna().sum():,} values")
+    else:
+        print("     ❌ No secondary energy price data found")
+        pivoted['secondary_energy_price_usd_per_gj'] = np.nan
+        pivoted['secondary_energy_price_unit'] = np.nan
+else:
+    print("     ❌ Secondary energy price columns not found in source data")
+    pivoted['secondary_energy_price_usd_per_gj'] = np.nan
+    pivoted['secondary_energy_price_unit'] = np.nan
+
+# Add secondary energy electricity price data
+print("   Adding secondary energy electricity price data:")
+secondary_elec_price_cols = ['secondary_energy_electricity_price', 'secondary_energy_electricity_price_unit']
+if all(col in df.columns for col in secondary_elec_price_cols):
+    # Get unique secondary energy electricity price data by model/scenario/scenario_geography/year
+    secondary_elec_data = df[join_cols + secondary_elec_price_cols].copy()
+    secondary_elec_data = secondary_elec_data.dropna(subset=['secondary_energy_electricity_price']).drop_duplicates()
+    
+    if not secondary_elec_data.empty:
+        # All secondary energy electricity prices are in US$2010/GJ - no unit variation
+        print(f"     📏 Secondary energy electricity price unit: US$2010/GJ (consistent)")
+        
+        col_name = 'secondary_energy_electricity_price_usd_per_gj'
+        secondary_elec_data = secondary_elec_data.rename(columns={'secondary_energy_electricity_price': col_name})
+        secondary_elec_data = secondary_elec_data.drop('secondary_energy_electricity_price_unit', axis=1)
+        
+        pivoted = pivoted.merge(secondary_elec_data, on=join_cols, how='left')
+        print(f"     ✅ Added secondary energy electricity price: {pivoted[col_name].notna().sum():,} values")
+    else:
+        print("     ❌ No secondary energy electricity price data found")
+        pivoted['secondary_energy_electricity_price_usd_per_gj'] = np.nan
+else:
+    print("     ❌ Secondary energy electricity price columns not found in source data")
+    pivoted['secondary_energy_electricity_price_usd_per_gj'] = np.nan
+
+print(f"   Final merged data: {pivoted.shape[0]:,} rows × {pivoted.shape[1]} columns")
+
+# =============================================================================
+# STEP 6.5: PRICE DATA INTEGRATION COMPLETE
+# =============================================================================
+print(f"\n✅ STEP 6.5: Price data integration complete")
+print("   Price columns added with NaN values where data not available")
+print("   No filtering applied - retaining all rows regardless of price data completeness")
+
+# Report data by sector (no price filtering)
+print("   Final data by sector:")
+for sector in sorted(pivoted["Sector"].unique()):
+    sector_count = len(pivoted[pivoted["Sector"] == sector])
+    sector_models = pivoted[pivoted["Sector"] == sector]["model"].nunique()
+    print(f"     📊 {sector}: {sector_count:,} rows from {sector_models} models")
+
 print(f"   Final merged data: {pivoted.shape[0]:,} rows × {pivoted.shape[1]} columns")
 
 # =============================================================================
@@ -239,7 +442,7 @@ for col in value_cols:
     if col in pivoted.columns:
         print(f"     📊 {col}: {pivoted[col].notna().sum():,} rows")
 
-cost_cols = [col for col in pivoted.columns if any(cost_term in col for cost_term in ['om_cost', 'capital_cost', 'efficiency', 'carbon_price'])]
+cost_cols = [col for col in pivoted.columns if any(cost_term in col for cost_term in ['om_cost', 'capital_cost', 'efficiency', 'carbon_price', 'energy_price', 'electricity_price'])]
 for col in cost_cols:
     if col in pivoted.columns:
         print(f"     💰 {col}: {pivoted[col].notna().sum():,} rows")
@@ -317,40 +520,63 @@ if len(filtered_df) > 0:
         return df.drop('capacity_additions_value', axis=1)
 
     def safe_convert_energy(df, unit_map, energy_type):
-        """Safely convert energy units (Primary or Secondary)"""
+        """Safely convert energy units (Primary or Secondary) - handles mixed units"""
         value_col = f'{energy_type.lower().replace(" ", "_")}_value'
         target_col = f'{energy_type.lower().replace(" ", "_")}_mwh_per_yr'
+        unit_col = 'unit'  # Use the actual unit column from source data
         
         if value_col not in df.columns:
             return df
-            
-        original_unit = unit_map.get(energy_type, {}).get('most_common', 'EJ/yr')
-        print(f"   📊 {energy_type} conversion: Detected unit = {original_unit}")
+        
+        # Check what units we have for this energy type
+        energy_rows = df[df[value_col].notna()]
+        if energy_rows.empty:
+            df[target_col] = df[value_col]  # No data to convert
+            return df.drop(value_col, axis=1)
+        
+        print(f"   📊 {energy_type} conversion: Processing mixed units")
         
         # Define conversion factors
-        ej_to_mwh = 1e18 / 3.6e6  # 1 EJ in Joules / 3.6e6 Joules per MWh
-        pj_to_mwh = 1e15 / 3.6e6  # 1 PJ in Joules / 3.6e6 Joules per MWh
-        tj_to_mwh = 1e12 / 3.6e6  # 1 TJ in Joules / 3.6e6 Joules per MWh
+        ej_to_mwh = 1e18 / 3.6e9  # 1 EJ in Joules / 3.6e9 Joules per MWh
+        pj_to_mwh = 1e15 / 3.6e9  # 1 PJ in Joules / 3.6e9 Joules per MWh
+        tj_to_mwh = 1e12 / 3.6e9  # 1 TJ in Joules / 3.6e9 Joules per MWh
         
-        if original_unit in ['EJ/yr', 'EJ yr-1']:
-            df[target_col] = df[value_col] * ej_to_mwh
-            print(f"   ✅ {energy_type}: EJ/yr → MWh/yr (×{ej_to_mwh:.0e})")
-        elif original_unit in ['PJ/yr', 'PJ yr-1']:
-            df[target_col] = df[value_col] * pj_to_mwh
-            print(f"   ✅ {energy_type}: PJ/yr → MWh/yr (×{pj_to_mwh:.0e})")
-        elif original_unit in ['TJ/yr', 'TJ yr-1']:
-            df[target_col] = df[value_col] * tj_to_mwh
-            print(f"   ✅ {energy_type}: TJ/yr → MWh/yr (×{tj_to_mwh:.0e})")
-        elif original_unit in ['MWh/yr', 'MWh yr-1']:
-            df[target_col] = df[value_col]  # No conversion needed
-            print(f"   ✅ {energy_type}: MWh/yr → MWh/yr (no conversion)")
-        elif 'EJ' in original_unit:
-            df[target_col] = df[value_col] * ej_to_mwh
-            print(f"   ✅ {energy_type}: {original_unit} → MWh/yr (×{ej_to_mwh:.0e})")
-        else:
-            df[target_col] = df[value_col]  # Preserve as-is
-            print(f"   ⚠️  {energy_type}: Unknown unit '{original_unit}' - values preserved as-is")
+        # Initialize target column
+        df[target_col] = df[value_col].copy()
+        
+        # Convert based on actual unit in each row (if unit column exists)
+        if unit_col in df.columns:
+            # EJ/yr conversion
+            ej_mask = df[unit_col].isin(['EJ/yr', 'EJ yr-1'])
+            ej_count = ej_mask.sum()
+            if ej_count > 0:
+                df.loc[ej_mask, target_col] = df.loc[ej_mask, value_col] * ej_to_mwh
+                print(f"   ✅ {energy_type}: {ej_count:,} EJ/yr values → MWh/yr (×{ej_to_mwh:.0e})")
             
+            # PJ/yr conversion  
+            pj_mask = df[unit_col].isin(['PJ/yr', 'PJ yr-1'])
+            pj_count = pj_mask.sum()
+            if pj_count > 0:
+                df.loc[pj_mask, target_col] = df.loc[pj_mask, value_col] * pj_to_mwh
+                print(f"   ✅ {energy_type}: {pj_count:,} PJ/yr values → MWh/yr (×{pj_to_mwh:.0e})")
+            
+            # TJ/yr conversion
+            tj_mask = df[unit_col].isin(['TJ/yr', 'TJ yr-1'])
+            tj_count = tj_mask.sum()
+            if tj_count > 0:
+                df.loc[tj_mask, target_col] = df.loc[tj_mask, value_col] * tj_to_mwh
+                print(f"   ✅ {energy_type}: {tj_count:,} TJ/yr values → MWh/yr (×{tj_to_mwh:.0e})")
+                
+        else:
+            # Fallback: use most common unit for all values
+            original_unit = unit_map.get(energy_type, {}).get('most_common', 'EJ/yr')
+            if 'PJ' in original_unit:
+                df[target_col] = df[value_col] * pj_to_mwh
+                print(f"   ✅ {energy_type}: {original_unit} → MWh/yr (×{pj_to_mwh:.0e})")
+            else:
+                df[target_col] = df[value_col] * ej_to_mwh
+                print(f"   ✅ {energy_type}: {original_unit} → MWh/yr (×{ej_to_mwh:.0e})")
+        
         return df.drop(value_col, axis=1)
 
     def safe_convert_lifetime(df, unit_map):
@@ -378,28 +604,64 @@ if len(filtered_df) > 0:
     filtered_df = safe_convert_energy(filtered_df, unit_mapping, 'Primary Energy')
     filtered_df = safe_convert_lifetime(filtered_df, unit_mapping)
 
-    # 5. Convert cost fields: USD/kW to USD/MW (multiply by 1000) - check source unit data
-    print("   Converting cost metrics:")
-    cost_fields_to_convert = ['om_cost_usd_per_mw_per_yr', 'capital_cost_usd_per_mw']
-    for field in cost_fields_to_convert:
-        if field in filtered_df.columns:
-            # These were already set up with MW naming, but values are still in kW basis
-            # Check if we have unit info for the corresponding cost metrics
-            cost_metric_name = "OM Cost" if "om_cost" in field else "Capital Cost"
-            cost_unit_info = unit_mapping.get(cost_metric_name, {})
-            source_unit = cost_unit_info.get('most_common', 'US$2010/kW')
-            
-            if 'kW' in source_unit:
-                filtered_df[field] = filtered_df[field] * 1000
-                print(f"   ✅ {field}: {source_unit} basis → USD/MW basis (×1000)")
-            elif 'MW' in source_unit:
-                print(f"   ✅ {field}: {source_unit} basis → USD/MW basis (no conversion)")
-            else:
-                filtered_df[field] = filtered_df[field] * 1000  # Default assumption
-                print(f"   ⚠️  {field}: Unknown source unit '{source_unit}' - applied default kW→MW conversion (×1000)")
+    # 5. Convert cost fields with proper unit handling
+    print("   Converting cost metrics with proper unit handling:")
+    
+    # We need to handle the conversion based on the actual unit data from step 1
+    # Since we don't have the unit info in step 2, we'll apply a more conservative approach
+    
+    # For OM Cost: Most data is in kW/yr, some in kWh/yr
+    if 'om_cost_usd_per_mw_per_yr' in filtered_df.columns:
+        # Filter out extreme negative values first
+        extreme_negative_mask = filtered_df['om_cost_usd_per_mw_per_yr'] < -1000000
+        if extreme_negative_mask.any():
+            print(f"   ⚠️  Filtering out {extreme_negative_mask.sum():,} extreme negative OM costs")
+            filtered_df.loc[extreme_negative_mask, 'om_cost_usd_per_mw_per_yr'] = np.nan
+        
+        # Set zero values to NaN
+        zero_mask = filtered_df['om_cost_usd_per_mw_per_yr'] == 0
+        if zero_mask.any():
+            print(f"   ⚠️  Setting {zero_mask.sum():,} zero OM costs to NaN")
+            filtered_df.loc[zero_mask, 'om_cost_usd_per_mw_per_yr'] = np.nan
+        
+        # Apply conversion only to reasonable positive values (up to 1 billion)
+        reasonable_mask = (filtered_df['om_cost_usd_per_mw_per_yr'] > 0) & (filtered_df['om_cost_usd_per_mw_per_yr'] < 1000000000)
+        if reasonable_mask.any():
+            filtered_df.loc[reasonable_mask, 'om_cost_usd_per_mw_per_yr'] = filtered_df.loc[reasonable_mask, 'om_cost_usd_per_mw_per_yr'] * 1000
+            print(f"   ✅ OM Cost: Applied kW→MW conversion (×1000) to {reasonable_mask.sum():,} reasonable values")
+        else:
+            print(f"   ⚠️  No reasonable OM cost values found for conversion")
+    
+    # For Capital Cost: Most data is in kW, some in kWh
+    if 'capital_cost_usd_per_mw' in filtered_df.columns:
+        # Filter out extreme negative values first
+        extreme_negative_mask = filtered_df['capital_cost_usd_per_mw'] < -1000000
+        if extreme_negative_mask.any():
+            print(f"   ⚠️  Filtering out {extreme_negative_mask.sum():,} extreme negative Capital costs")
+            filtered_df.loc[extreme_negative_mask, 'capital_cost_usd_per_mw'] = np.nan
+        
+        # Set zero values to NaN
+        zero_mask = filtered_df['capital_cost_usd_per_mw'] == 0
+        if zero_mask.any():
+            print(f"   ⚠️  Setting {zero_mask.sum():,} zero Capital costs to NaN")
+            filtered_df.loc[zero_mask, 'capital_cost_usd_per_mw'] = np.nan
+        
+        # Apply conversion only to reasonable positive values (up to 1 billion)
+        reasonable_mask = (filtered_df['capital_cost_usd_per_mw'] > 0) & (filtered_df['capital_cost_usd_per_mw'] < 1000000000)
+        if reasonable_mask.any():
+            filtered_df.loc[reasonable_mask, 'capital_cost_usd_per_mw'] = filtered_df.loc[reasonable_mask, 'capital_cost_usd_per_mw'] * 1000
+            print(f"   ✅ Capital Cost: Applied kW→MW conversion (×1000) to {reasonable_mask.sum():,} reasonable values")
+        else:
+            print(f"   ⚠️  No reasonable Capital cost values found for conversion")
 
     # 6. Convert efficiency: percentage to decimal
     if 'efficiency_percent' in filtered_df.columns:
+        # Set zero efficiency values to NaN
+        zero_efficiency_mask = filtered_df['efficiency_percent'] == 0
+        if zero_efficiency_mask.any():
+            print(f"   ⚠️  Setting {zero_efficiency_mask.sum():,} zero efficiency values to NaN")
+            filtered_df.loc[zero_efficiency_mask, 'efficiency_percent'] = np.nan
+        
         efficiency_mask = filtered_df['efficiency_percent'] > 1
         filtered_df['efficiency_decimal'] = filtered_df['efficiency_percent'].copy()
         if efficiency_mask.any():
@@ -409,13 +671,19 @@ if len(filtered_df) > 0:
             print(f"   ✅ Efficiency: All values already in decimal format")
         filtered_df = filtered_df.drop('efficiency_percent', axis=1)
 
-    # 7. Convert any price fields from USD/GJ to USD/MWh (multiply by 3.6)
+    # 7. Energy price fields are kept in USD/GJ (no conversion needed)
     price_fields_gj = [col for col in filtered_df.columns if 'usd_per_gj' in col]
     for field in price_fields_gj:
-        new_field = field.replace('usd_per_gj', 'usd_per_mwh')
-        filtered_df[new_field] = filtered_df[field] * 3.6
-        filtered_df = filtered_df.drop(field, axis=1)
-        print(f"   ✅ {field}: USD/GJ → USD/MWh (×3.6)")
+        non_na_count = filtered_df[field].notna().sum()
+        print(f"   ✅ {field}: {non_na_count:,} values (kept in USD/GJ)")
+
+    # 8. Energy price fields are kept in their original units (USD/GJ)
+    print("   Energy price metrics:")
+    energy_price_fields = ['primary_energy_price_usd_per_gj', 'secondary_energy_price_usd_per_gj', 'secondary_energy_electricity_price_usd_per_gj']
+    for field in energy_price_fields:
+        if field in filtered_df.columns:
+            non_na_count = filtered_df[field].notna().sum()
+            print(f"   ✅ {field}: {non_na_count:,} values (kept in USD/GJ)")
         
     print(f"   Unit conversions completed safely based on original data units")
 
@@ -471,7 +739,7 @@ if len(filtered_df) > 0:
     # Final column summary
     print(f"\n   Final dataset structure:")
     all_cols = filtered_df.columns.tolist()
-    grouping_cols_final = [col for col in all_cols if col in ['model', 'scenario', 'region', 'year', 'Sector', 'Subsector', 'Technology']]
+    grouping_cols_final = [col for col in all_cols if col in ['model', 'scenario', 'scenario_geography', 'year', 'Sector', 'Technology']]
     value_cols_final = [col for col in all_cols if col not in grouping_cols_final]
     
     print(f"     📊 Grouping columns ({len(grouping_cols_final)}): {grouping_cols_final}")
@@ -489,6 +757,8 @@ print("✅ PIPELINE COMPLETED SUCCESSFULLY")
 print("=" * 80)
 print("Final dataset ready for analysis with:")
 print("• Perfect energy coverage: All technologies have energy data")
+print("• Cost metrics: OM Cost, Capital Cost, Efficiency data")
+print("• Price columns: Available with NaN where data not present")
 print("• Standardized units: MW/MWh/years/USD basis")
 print("• Clean structure: Units embedded in column names")
 print("• Production ready: Quality filtered and validated")

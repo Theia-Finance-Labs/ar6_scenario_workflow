@@ -1,0 +1,127 @@
+current_sector,current_technology,target_sector,target_technology,aggregation_group,decision_framework,notes
+# =============================================================================
+# STEEL SECTOR MAPPINGS
+# =============================================================================
+# Steel sector technologies - direct mappings to target combinations
+Steel,BF-OHF,Steel,BF-OHF,single,direct_mapping,Blast furnace with open hearth furnace
+Steel,DRI-EAF,Steel,DRI-EAF,single,direct_mapping,Direct reduced iron with electric arc furnace
+Steel,DRI-BOF,Steel,DRI-BOF,single,direct_mapping,Direct reduced iron with basic oxygen furnace
+Steel,BF-EAF,Steel,BF-EAF,single,direct_mapping,Blast furnace with electric arc furnace
+Steel,EAF,Steel,EAF,single,direct_mapping,Electric arc furnace only
+Steel,BOF,Steel,BOF,single,direct_mapping,Basic oxygen furnace only
+
+# =============================================================================
+# COAL SECTOR MAPPINGS  
+# =============================================================================
+# Coal sector - all coal technologies map to single "Coal" target
+Coal,Coal,Coal,Coal,coal_aggregate,sum_pathways_average_costs,All coal technologies aggregated
+Coal,Coal - Gases,Coal,Coal,coal_aggregate,sum_pathways_average_costs,Coal gasification included
+Coal,Coal - Gases - w/o CCS,Coal,Coal,coal_aggregate,sum_pathways_average_costs,Coal gasification without CCS
+Coal,Coal - Liquids,Coal,Coal,coal_aggregate,sum_pathways_average_costs,Coal liquefaction included
+Coal,Coal - Solids,Coal,Coal,coal_aggregate,sum_pathways_average_costs,Coal solids included
+Coal,Coal - w/ CCS,Coal,Coal,coal_aggregate,sum_pathways_average_costs,Coal with CCS included
+Coal,Coal - w/o CCS,Coal,Coal,coal_aggregate,sum_pathways_average_costs,Coal without CCS included
+
+# =============================================================================
+# OIL&GAS SECTOR MAPPINGS
+# =============================================================================
+# Gas technologies - all map to "Gas" target
+Gas&Oil,Gas,Oil&Gas,Gas,gas_aggregate,sum_pathways_average_costs,All gas technologies aggregated
+Gas&Oil,Gas - Gases,Oil&Gas,Gas,gas_aggregate,sum_pathways_average_costs,Gas gases included
+Gas&Oil,Gas - Liquids,Oil&Gas,Gas,gas_aggregate,sum_pathways_average_costs,Gas liquids included
+Gas&Oil,Gas - Solids,Oil&Gas,Gas,gas_aggregate,sum_pathways_average_costs,Gas solids included
+Gas&Oil,Gas - Synthetic,Oil&Gas,Gas,gas_aggregate,sum_pathways_average_costs,Synthetic gas included
+Gas&Oil,Gas - w/ CCS,Oil&Gas,Gas,gas_aggregate,sum_pathways_average_costs,Gas with CCS included
+Gas&Oil,Gas - w/o CCS,Oil&Gas,Gas,gas_aggregate,sum_pathways_average_costs,Gas without CCS included
+
+# Oil technologies - all map to "Oil" target
+Gas&Oil,Oil,Oil&Gas,Oil,oil_aggregate,sum_pathways_average_costs,All oil technologies aggregated
+Gas&Oil,Oil - Gases,Oil&Gas,Oil,oil_aggregate,sum_pathways_average_costs,Oil gases included
+Gas&Oil,Oil - Liquids,Oil&Gas,Oil,oil_aggregate,sum_pathways_average_costs,Oil liquids included
+Gas&Oil,Oil - Solids,Oil&Gas,Oil,oil_aggregate,sum_pathways_average_costs,Oil solids included
+Gas&Oil,Oil - w/ CCS,Oil&Gas,Oil,oil_aggregate,sum_pathways_average_costs,Oil with CCS included
+Gas&Oil,Oil - w/o CCS,Oil&Gas,Oil,oil_aggregate,sum_pathways_average_costs,Oil without CCS included
+
+# =============================================================================
+# POWER SECTOR MAPPINGS
+# =============================================================================
+# Biomass power technologies
+Power,Biomass,Power,BiomassCap,biomass_aggregate,sum_pathways_average_costs,All biomass power aggregated
+Power,Biomass - w/ CCS,Power,BiomassCap_w/ CCS,single,direct_mapping,Biomass with CCS
+Power,Biomass - w/o CCS,Power,BiomassCap_w/o CCS,single,direct_mapping,Biomass without CCS
+
+# Coal power technologies
+Power,Coal,Power,CoalCap,coal_power_aggregate,sum_pathways_average_costs,All coal power aggregated
+Power,Coal - w/ CCS,Power,CoalCap_w/ CCS,single,direct_mapping,Coal power with CCS
+Power,Coal - w/o CCS,Power,CoalCap_w/o CCS,single,direct_mapping,Coal power without CCS
+
+# Gas power technologies
+Power,Gas,Power,GasCap,gas_power_aggregate,sum_pathways_average_costs,All gas power aggregated
+Power,Gas - w/ CCS,Power,GasCap_w/ CCS,single,direct_mapping,Gas power with CCS
+Power,Gas - w/o CCS,Power,GasCap_w/o CCS,single,direct_mapping,Gas power without CCS
+
+# Oil power technologies
+Power,Oil,Power,OilCap,oil_power_aggregate,sum_pathways_average_costs,All oil power aggregated
+Power,Oil - w/ CCS,Power,OilCap_w/ CCS,single,direct_mapping,Oil power with CCS
+Power,Oil - w/o CCS,Power,OilCap_w/o CCS,single,direct_mapping,Oil power without CCS
+
+# Geothermal power
+Power,Geothermal,Power,GeothermalCap,single,direct_mapping,Geothermal power
+Renewables,Geothermal,Power,GeothermalCap,single,direct_mapping,Geothermal moved from Renewables
+
+# Hydro power
+Power,Hydro,Power,HydroCap,single,direct_mapping,Hydro power
+Renewables,Hydro,Power,HydroCap,single,direct_mapping,Hydro moved from Renewables
+
+# Nuclear power
+Power,Nuclear,Power,NuclearCap,single,direct_mapping,Nuclear power
+Renewables,Nuclear,Power,NuclearCap,single,direct_mapping,Nuclear moved from Renewables
+
+# Solar power - aggregate PV and CSP
+Power,Solar - PV,Power,SolarCap,solar_aggregate,sum_pathways_average_costs,Solar PV aggregated with CSP
+Power,Solar - CSP,Power,SolarCap,solar_aggregate,sum_pathways_average_costs,Solar CSP aggregated with PV
+Renewables,Solar - PV,Power,SolarCap,solar_aggregate,sum_pathways_average_costs,Solar PV from Renewables
+Renewables,Solar - CSP,Power,SolarCap,solar_aggregate,sum_pathways_average_costs,Solar CSP from Renewables
+
+# Wind power - aggregate onshore and offshore
+Power,Wind,Power,WindCap,wind_aggregate,sum_pathways_average_costs,All wind power aggregated
+Power,Wind - Onshore,Power,WindCap,wind_aggregate,sum_pathways_average_costs,Wind onshore aggregated
+Power,Wind - Offshore,Power,WindCap,wind_aggregate,sum_pathways_average_costs,Wind offshore aggregated
+Renewables,Wind,Power,WindCap,wind_aggregate,sum_pathways_average_costs,Wind from Renewables
+Renewables,Wind - Onshore,Power,WindCap,wind_aggregate,sum_pathways_average_costs,Wind onshore from Renewables
+Renewables,Wind - Offshore,Power,WindCap,wind_aggregate,sum_pathways_average_costs,Wind offshore from Renewables
+
+# =============================================================================
+# RENEWABLES SECTOR MAPPINGS (MOVING TO POWER)
+# =============================================================================
+# Renewables technologies that move to Power sector
+Renewables,Non-Biomass Renewables,Power,RenewablesCap,single,direct_mapping,Non-biomass renewables aggregate
+Renewables,Ocean,Power,RenewablesCap,single,direct_mapping,Ocean energy included in renewables
+
+# =============================================================================
+# HYDROGEN SECTOR MAPPINGS (MOVING TO POWER)
+# =============================================================================
+# Hydrogen technologies that map to power generation
+Hydrogen,Hydrogen,Power,HydroCap,single,direct_mapping,Hydrogen power generation
+Hydrogen,Hydrogen - Biomass - w/o CCS,Power,BiomassCap_w/o CCS,single,direct_mapping,Hydrogen from biomass
+Hydrogen,Hydrogen - Coal - w/ CCS,Power,CoalCap_w/ CCS,single,direct_mapping,Hydrogen from coal with CCS
+Hydrogen,Hydrogen - Coal - w/o CCS,Power,CoalCap_w/o CCS,single,direct_mapping,Hydrogen from coal without CCS
+Hydrogen,Hydrogen - Gas - w/ CCS,Power,GasCap_w/ CCS,single,direct_mapping,Hydrogen from gas with CCS
+Hydrogen,Hydrogen - Gas - w/o CCS,Power,GasCap_w/o CCS,single,direct_mapping,Hydrogen from gas without CCS
+
+# =============================================================================
+# DECISION FRAMEWORK SUMMARY
+# =============================================================================
+# decision_framework values:
+# - direct_mapping: 1:1 mapping, no aggregation needed
+# - sum_pathways_average_costs: Sum pathway values, average cost/price metrics
+# - single: Individual technology, no aggregation
+# - coal_aggregate: All coal technologies aggregated to single "Coal" target
+# - gas_aggregate: All gas technologies aggregated to single "Gas" target  
+# - oil_aggregate: All oil technologies aggregated to single "Oil" target
+# - biomass_aggregate: All biomass power aggregated to "BiomassCap"
+# - coal_power_aggregate: All coal power aggregated to "CoalCap"
+# - gas_power_aggregate: All gas power aggregated to "GasCap"
+# - oil_power_aggregate: All oil power aggregated to "OilCap"
+# - solar_aggregate: Solar PV + CSP aggregated to "SolarCap"
+# - wind_aggregate: Wind onshore + offshore aggregated to "WindCap" 

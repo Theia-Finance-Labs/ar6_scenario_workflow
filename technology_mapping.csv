@@ -1,0 +1,20 @@
+current_sector,current_technology,target_sector,target_technology,aggregation_group,notes
+Power,Biomass - w/ CCS,Power,BiomassCap_w/ CCS,single,Direct mapping
+Power,Biomass - w/o CCS,Power,BiomassCap_w/o CCS,single,Direct mapping
+Power,Coal - w/ CCS,Power,CoalCap_w/ CCS,single,Direct mapping
+Power,Coal - w/o CCS,Power,CoalCap_w/o CCS,single,Direct mapping
+Power,Gas - w/ CCS,Power,GasCap_w/ CCS,single,Direct mapping
+Power,Gas - w/o CCS,Power,GasCap_w/o CCS,single,Direct mapping
+Power,Hydrogen,Power,HydroCap,single,Check if this should be separate hydrogen category
+Renewables,Geothermal,Power,GeothermalCap,single,Move from Renewables to Power sector
+Renewables,Hydro,Power,HydroCap,single,Move from Renewables to Power sector
+Renewables,Solar - PV,Power,SolarCap,solar_group,Aggregate with CSP
+Renewables,Solar - CSP,Power,SolarCap,solar_group,Aggregate with PV
+Renewables,Wind - Onshore,Power,WindCap,wind_group,Aggregate with Offshore
+Renewables,Wind - Offshore,Power,WindCap,wind_group,Aggregate with Onshore
+Gas&Oil,Gas - w/ CCS,Oil&Gas,Gas,single,Change sector name to Oil&Gas
+Hydrogen,Hydrogen - Biomass - w/o CCS,Power,BiomassCap_w/o CCS,single,May need separate hydrogen sector in target
+Hydrogen,Hydrogen - Coal - w/ CCS,Power,CoalCap_w/ CCS,single,May need separate hydrogen sector in target
+Hydrogen,Hydrogen - Coal - w/o CCS,Power,CoalCap_w/o CCS,single,May need separate hydrogen sector in target
+Hydrogen,Hydrogen - Gas - w/ CCS,Power,GasCap_w/ CCS,single,May need separate hydrogen sector in target
+Hydrogen,Hydrogen - Gas - w/o CCS,Power,GasCap_w/o CCS,single,May need separate hydrogen sector in target 
