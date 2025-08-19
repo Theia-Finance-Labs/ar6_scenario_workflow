@@ -30,8 +30,9 @@ Version: 3.3
 Last Updated: 2024
 """
 
-import modin.pandas as pd
+import pandas as pd
 import numpy as np
+from tqdm import tqdm
 
 print("=" * 80)
 print("AR6 CLIMATE SCENARIO DATA FINALIZATION PIPELINE")
@@ -231,12 +232,6 @@ def determine_price_unit(row, step1_df):
         return "USD/MWh"  # Default fallback
 
 
-target_df["price_unit"] = target_df.apply(
-    lambda row: determine_price_unit(row, step1_df), axis=1
-)
-target_df["price_indicator"] = np.nan  # Keep as NA
-
-
 # Price calculation functions using original step 1 data
 def convert_energy_price_to_mwh(price_value, unit):
     """Convert energy price to USD/MWh based on unit"""
@@ -268,74 +263,102 @@ def convert_energy_price_to_mwh(price_value, unit):
         return price_value
 
 
-def get_price_from_original_data(row, step1_df, price_type, fuel=None):
-    """Get price from original step 1 data with proper unit conversion"""
+def get_scenario_price_vectorized(target_df, step1_df):
+    """Vectorized scenario price calculation"""
     if step1_df is None:
-        return np.nan
+        return pd.Series(np.nan, index=target_df.index)
 
-    # Get the row's identifying information
-    model = row["scenario_provider"]
-    scenario = row["scenario"]
-    geography = row["scenario_geography"]
-    year = row["scenario_year"]
-    technology = row["technology"]
-
-    # Filter step 1 data for this specific row
-    mask = (
-        (step1_df["model"] == model)
-        & (step1_df["scenario"] == scenario)
-        & (step1_df["region"] == geography)
-        & (step1_df["year"] == year)
-        & (step1_df["col1"] == "Price")
+    print("     Creating electricity price lookup...")
+    # Create electricity price lookup (for Power and Renewables)
+    electricity_mask = (
+        (step1_df["col1"] == "Price")
+        & (step1_df["col2"] == "Secondary Energy")
+        & (step1_df["Fuel"] == "Electricity")
+    )
+    electricity_prices = step1_df[electricity_mask].copy()
+    electricity_prices["price_usd_mwh"] = electricity_prices.apply(
+        lambda row: convert_energy_price_to_mwh(row["value"], row["unit"]), axis=1
     )
 
-    # Add fuel filter if specified
-    if fuel:
-        mask = mask & (step1_df["Fuel"] == fuel)
+    # Create lookup key
+    electricity_prices["lookup_key"] = (
+        electricity_prices["model"].astype(str)
+        + "|||"
+        + electricity_prices["scenario"].astype(str)
+        + "|||"
+        + electricity_prices["region"].astype(str)
+        + "|||"
+        + electricity_prices["year"].astype(str)
+    )
 
-    # Add price type filter
-    if price_type == "electricity":
-        mask = (
-            mask
-            & (step1_df["col2"] == "Secondary Energy")
-            & (step1_df["Fuel"] == "Electricity")
-        )
-    elif price_type == "primary":
-        mask = mask & (step1_df["col2"] == "Primary Energy")
-    elif price_type == "secondary":
-        mask = mask & (step1_df["col2"] == "Secondary Energy")
+    electricity_lookup = (
+        electricity_prices.groupby("lookup_key")["price_usd_mwh"].first().to_dict()
+    )
 
-    price_data = step1_df[mask]
+    print("     Creating primary energy price lookup...")
+    # Create primary energy price lookup (for other sectors)
+    primary_mask = (step1_df["col1"] == "Price") & (
+        step1_df["col2"] == "Primary Energy"
+    )
+    primary_prices = step1_df[primary_mask].copy()
+    primary_prices["price_usd_mwh"] = primary_prices.apply(
+        lambda row: convert_energy_price_to_mwh(row["value"], row["unit"]), axis=1
+    )
 
-    if len(price_data) == 0:
-        return np.nan
+    primary_prices["lookup_key"] = (
+        primary_prices["model"].astype(str)
+        + "|||"
+        + primary_prices["scenario"].astype(str)
+        + "|||"
+        + primary_prices["region"].astype(str)
+        + "|||"
+        + primary_prices["year"].astype(str)
+    )
 
-    # Get the first matching price (should be unique for this combination)
-    price_row = price_data.iloc[0]
-    price_value = price_row["value"]
-    price_unit = price_row["unit"]
+    primary_lookup = (
+        primary_prices.groupby("lookup_key")["price_usd_mwh"].first().to_dict()
+    )
 
-    # Convert to USD/MWh
-    return convert_energy_price_to_mwh(price_value, price_unit)
+    print("     Applying price lookups...")
+    # Create lookup key for target data
+    target_df["lookup_key"] = (
+        target_df["scenario_provider"].astype(str)
+        + "|||"
+        + target_df["scenario"].astype(str)
+        + "|||"
+        + target_df["scenario_geography"].astype(str)
+        + "|||"
+        + target_df["scenario_year"].astype(str)
+    )
+
+    # Apply appropriate price based on sector
+    scenario_prices = np.full(len(target_df), np.nan)
+
+    # Power and Renewables use electricity prices
+    power_renewable_mask = target_df["sector"].isin(["Power", "Renewables"])
+    power_renewable_keys = target_df.loc[power_renewable_mask, "lookup_key"]
+    scenario_prices[power_renewable_mask] = power_renewable_keys.map(
+        electricity_lookup
+    ).fillna(np.nan)
+
+    # Other sectors use primary energy prices
+    other_mask = ~power_renewable_mask
+    other_keys = target_df.loc[other_mask, "lookup_key"]
+    scenario_prices[other_mask] = other_keys.map(primary_lookup).fillna(np.nan)
+
+    # Clean up temporary column
+    target_df.drop("lookup_key", axis=1, inplace=True)
+
+    return pd.Series(scenario_prices, index=target_df.index)
 
 
-def get_scenario_price(row, step1_df):
-    """Get scenario price based on sector"""
-    sector = row["sector"]
+def get_fuel_price_vectorized(target_df, step1_df):
+    """Vectorized fuel price calculation"""
+    if step1_df is None:
+        return pd.Series(np.nan, index=target_df.index)
 
-    if sector in ["Power", "Renewables"]:
-        # Use secondary energy electricity price for Power and Renewables sectors
-        return get_price_from_original_data(row, step1_df, "electricity")
-    else:
-        # Use primary energy price for other sectors
-        return get_price_from_original_data(row, step1_df, "primary")
-
-
-def get_fuel_price(row, step1_df):
-    """Get fuel price based on technology's fuel"""
-    technology = row["technology"]
-
-    # Map technology to fuel
+    print("     Creating technology to fuel mapping...")
+    # Technology to fuel mapping
     fuel_mapping = {
         "GasCap": "Gas",
         "GasCap_w/ CCS": "Gas",
@@ -355,23 +378,74 @@ def get_fuel_price(row, step1_df):
         "SolarCap": "Solar",
         "GeothermalCap": "Geothermal",
         "OceanCap": "Ocean",
-        # Add more mappings as needed
     }
 
-    fuel = fuel_mapping.get(technology, "Gas")  # Default to Gas if not found
+    # Map technologies to fuels
+    target_df["fuel_type"] = target_df["technology"].map(fuel_mapping).fillna("Gas")
 
-    # Get secondary energy price for this fuel
-    return get_price_from_original_data(row, step1_df, "secondary", fuel)
+    print("     Creating secondary energy fuel price lookups...")
+    # Create secondary energy price lookup for each fuel type
+    secondary_mask = (step1_df["col1"] == "Price") & (
+        step1_df["col2"] == "Secondary Energy"
+    )
+    secondary_prices = step1_df[secondary_mask].copy()
+    secondary_prices["price_usd_mwh"] = secondary_prices.apply(
+        lambda row: convert_energy_price_to_mwh(row["value"], row["unit"]), axis=1
+    )
+
+    # Create comprehensive lookup key including fuel type
+    secondary_prices["lookup_key"] = (
+        secondary_prices["model"].astype(str)
+        + "|||"
+        + secondary_prices["scenario"].astype(str)
+        + "|||"
+        + secondary_prices["region"].astype(str)
+        + "|||"
+        + secondary_prices["year"].astype(str)
+        + "|||"
+        + secondary_prices["Fuel"].astype(str)
+    )
+
+    fuel_price_lookup = (
+        secondary_prices.groupby("lookup_key")["price_usd_mwh"].first().to_dict()
+    )
+
+    print("     Applying fuel price lookups...")
+    # Create lookup key for target data including fuel type
+    target_df["lookup_key"] = (
+        target_df["scenario_provider"].astype(str)
+        + "|||"
+        + target_df["scenario"].astype(str)
+        + "|||"
+        + target_df["scenario_geography"].astype(str)
+        + "|||"
+        + target_df["scenario_year"].astype(str)
+        + "|||"
+        + target_df["fuel_type"].astype(str)
+    )
+
+    # Apply fuel price lookup
+    fuel_prices = target_df["lookup_key"].map(fuel_price_lookup).fillna(np.nan)
+
+    # Clean up temporary columns
+    target_df.drop(["fuel_type", "lookup_key"], axis=1, inplace=True)
+
+    return fuel_prices
 
 
-# Calculate scenario_price and fuel_price
-print("   Calculating scenario_price and fuel_price from original data...")
-target_df["scenario_price"] = target_df.apply(
-    lambda row: get_scenario_price(row, step1_df), axis=1
+# Calculate scenario_price and fuel_price (vectorized)
+print("   Calculating scenario_price and fuel_price from original data (vectorized)...")
+print("   🚀 Vectorized scenario_price calculation...")
+target_df["scenario_price"] = get_scenario_price_vectorized(target_df, step1_df)
+
+print("   🚀 Vectorized fuel_price calculation...")
+target_df["fuel_price"] = get_fuel_price_vectorized(target_df, step1_df)
+
+
+target_df["price_unit"] = target_df.apply(
+    lambda row: determine_price_unit(row, step1_df), axis=1
 )
-target_df["fuel_price"] = target_df.apply(
-    lambda row: get_fuel_price(row, step1_df), axis=1
-)
+target_df["price_indicator"] = np.nan  # Keep as NA
 
 
 # Pathway calculations with sector-specific logic

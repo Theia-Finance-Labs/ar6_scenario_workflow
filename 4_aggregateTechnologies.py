@@ -56,7 +56,7 @@ Version: 4.2
 Last Updated: 2024
 """
 
-import modin.pandas as pd
+import pandas as pd
 import numpy as np
 
 print("=" * 80)
@@ -379,16 +379,19 @@ for _, row in final_combinations.iterrows():
     print(f"     {row['sector']} - {row['technology']}: {row['count']:,} rows")
 
 # Check for any unmapped technologies
-unmapped = aggregated_df[
-    ~aggregated_df.apply(
-        lambda x: (x["sector"], x["technology"])
-        in [
-            (row["target_sector"], row["target_technology"])
-            for _, row in mapping_df.iterrows()
-        ],
-        axis=1,
-    )
-]
+# Create a set of all valid target sector-technology combinations
+valid_combinations = set(
+    zip(mapping_df["target_sector"], mapping_df["target_technology"])
+)
+
+# Create boolean mask using vectorized operations
+sector_tech_combinations = list(
+    zip(aggregated_df["sector"], aggregated_df["technology"])
+)
+unmapped_mask = ~pd.Series(sector_tech_combinations).isin(valid_combinations)
+
+# Filter to get unmapped rows
+unmapped = aggregated_df[unmapped_mask]
 
 if len(unmapped) > 0:
     print(f"   ⚠️  Found {len(unmapped)} rows with unmapped technologies:")

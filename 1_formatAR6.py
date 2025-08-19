@@ -22,7 +22,7 @@ The pipeline:
 6. Outputs final dataset with 30+ columns
 """
 
-import modin.pandas as pd
+import pandas as pd
 import numpy as np
 
 # =============================================================================
@@ -53,7 +53,8 @@ print(f"Output: {OUTPUT_FILE}")
 ## =============================================================================
 
 print("Loading input files...")
-source = pd.read_feather(INPUT_FILE)
+source = pd.read_csv(INPUT_FILE)
+source = source.loc[source["Model"] == "WITCH 5.0", :]
 excel_mapping = pd.read_csv("ar6_variables_with_mapping.csv")
 
 print(f"AR6 data shape: {source.shape}")
