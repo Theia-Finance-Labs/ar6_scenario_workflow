@@ -29,7 +29,7 @@ Version: 2.0
 Last Updated: 2024
 """
 
-import modin.pandas as pd
+import pandas as pd
 import numpy as np
 
 print("=" * 80)
