@@ -10,7 +10,7 @@ Input files:
 - ar6_variables_with_mapping.csv: Variable mappings for sectors/technologies
 
 Output:
-- 1_intermediate_AR6_scenario_formatting_ISO3.csv: Processed ISO3 data 
+- 1_intermediate_AR6_scenario_formatting_ISO3.csv: Processed ISO3 data
 - 1_intermediate_AR6_scenario_formatting_R10.csv: Processed R10 data
 
 The pipeline:
@@ -33,10 +33,10 @@ import numpy as np
 DATASET_TYPE = "ISO3"  # Options: "ISO3" or "R10"
 
 if DATASET_TYPE == "ISO3":
-    INPUT_FILE = "AR6_Scenarios_Database_ISO3_v1.1.feather"
+    INPUT_FILE = "AR6_Scenarios_Database_ISO3_v1.1.csv"
     OUTPUT_FILE = "1_intermediate_AR6_scenario_formatting_ISO3.csv"
 elif DATASET_TYPE == "R10":
-    INPUT_FILE = "AR6_Scenarios_Database_R10_regions_v1.1.feather"
+    INPUT_FILE = "AR6_Scenarios_Database_R10_regions_v1.1.csv"
     OUTPUT_FILE = "1_intermediate_AR6_scenario_formatting_R10.csv"
 else:
     raise ValueError("DATASET_TYPE must be 'ISO3' or 'R10'")
@@ -64,7 +64,7 @@ print(f"Mapping data shape: {excel_mapping.shape}")
 ## =============================================================================
 
 print("Melting AR6 data from wide to long format...")
-id_cols = ['Model', 'Scenario', 'Region', 'Variable', 'Unit']
+id_cols = ["Model", "Scenario", "Region", "Variable", "Unit"]
 
 # Filter year columns to only include years > 2020 BEFORE melting (major memory savings)
 all_year_cols = [col for col in source.columns if col not in id_cols]
@@ -82,19 +82,19 @@ for col in all_year_cols:
         continue
 
 print(f"Year columns for analysis (2021-2050): {len(year_cols)} columns")
-print(f"Year range: {min([float(col) for col in year_cols])}-{max([float(col) for col in year_cols])}")
+print(
+    f"Year range: {min([float(col) for col in year_cols])}-{max([float(col) for col in year_cols])}"
+)
 
 # Melt the data (years are columns, need to convert to rows)
-melted = pd.melt(source, 
-                 id_vars=id_cols, 
-                 value_vars=year_cols, 
-                 var_name='Year', 
-                 value_name='Value')
+melted = pd.melt(
+    source, id_vars=id_cols, value_vars=year_cols, var_name="Year", value_name="Value"
+)
 
 # Data cleaning: convert types and filter out missing/invalid values
-melted['Year'] = pd.to_numeric(melted['Year'], errors='coerce')
+melted["Year"] = pd.to_numeric(melted["Year"], errors="coerce")
 # Removed filtering - keep all data including missing values and extreme values
-melted['Value'] = pd.to_numeric(melted['Value'], errors='coerce')
+melted["Value"] = pd.to_numeric(melted["Value"], errors="coerce")
 
 print(f"Melted data shape: {melted.shape}")
 
@@ -102,12 +102,12 @@ print(f"Melted data shape: {melted.shape}")
 renamed = melted.rename(
     columns={
         "Model": "model",
-        "Scenario": "scenario", 
+        "Scenario": "scenario",
         "Region": "region",
         "Variable": "variable",
         "Unit": "unit",
         "Year": "year",
-        "Value": "value"
+        "Value": "value",
     }
 )
 
@@ -118,8 +118,7 @@ renamed = melted.rename(
 print("Joining with mapping data...")
 # Join scenario data with variable mappings to categorize technologies
 base_data = (
-    renamed
-    .merge(excel_mapping, how="left", left_on="variable", right_on="variable")
+    renamed.merge(excel_mapping, how="left", left_on="variable", right_on="variable")
     # Removed dropna and drop_duplicates filtering - keep all data
 )
 
@@ -134,13 +133,23 @@ removed_rows = initial_rows - final_rows
 
 print(f"   Before Sector filtering: {initial_rows:,} rows")
 print(f"   After Sector filtering: {final_rows:,} rows")
-print(f"   Removed {removed_rows:,} rows ({removed_rows/initial_rows*100:.1f}%) with missing Sector mapping")
+print(
+    f"   Removed {removed_rows:,} rows ({removed_rows/initial_rows*100:.1f}%) with missing Sector mapping"
+)
 
 print(f"   Available sectors: {sorted(base_data['Sector'].unique())}")
 
 # Filter for only target sectors of interest
 print("Filtering for target sectors only...")
-target_sectors = ["Steel", "Nuclear", "Gas&Oil", "Cement", "Coal", "Renewables", "Power"]
+target_sectors = [
+    "Steel",
+    "Nuclear",
+    "Gas&Oil",
+    "Cement",
+    "Coal",
+    "Renewables",
+    "Power",
+]
 initial_rows_sector = len(base_data)
 base_data = base_data[base_data["Sector"].isin(target_sectors)].copy()
 final_rows_sector = len(base_data)
@@ -148,7 +157,9 @@ removed_rows_sector = initial_rows_sector - final_rows_sector
 
 print(f"   Before target sector filtering: {initial_rows_sector:,} rows")
 print(f"   After target sector filtering: {final_rows_sector:,} rows")
-print(f"   Removed {removed_rows_sector:,} rows ({removed_rows_sector/initial_rows_sector*100:.1f}%) from non-target sectors")
+print(
+    f"   Removed {removed_rows_sector:,} rows ({removed_rows_sector/initial_rows_sector*100:.1f}%) from non-target sectors"
+)
 
 print(f"   Final sectors: {sorted(base_data['Sector'].unique())}")
 
@@ -157,20 +168,28 @@ print(f"   Final sectors: {sorted(base_data['Sector'].unique())}")
 ## =============================================================================
 
 # Define join columns for cost metric self-joins
-join_cols = [
-    "model", "scenario", "region", "year", "Sector", "Subsector", "Technology"
-]
+join_cols = ["model", "scenario", "region", "year", "Sector", "Subsector", "Technology"]
+
 
 def get_metric(df, metric_name):
     """Extract a specific cost metric (OM Cost, Capital Cost, Efficiency) from base data"""
     metric_data = df[df["col1"] == metric_name]
     if metric_data.empty:
-        return pd.DataFrame(columns=join_cols + [f"{metric_name.lower().replace(' ', '_')}", f"{metric_name.lower().replace(' ', '_')}_unit"])
-    
-    return (
-        metric_data[join_cols + ["value", "unit"]]
-        .rename(columns={"value": f"{metric_name.lower().replace(' ', '_')}", "unit": f"{metric_name.lower().replace(' ', '_')}_unit"})
+        return pd.DataFrame(
+            columns=join_cols
+            + [
+                f"{metric_name.lower().replace(' ', '_')}",
+                f"{metric_name.lower().replace(' ', '_')}_unit",
+            ]
+        )
+
+    return metric_data[join_cols + ["value", "unit"]].rename(
+        columns={
+            "value": f"{metric_name.lower().replace(' ', '_')}",
+            "unit": f"{metric_name.lower().replace(' ', '_')}_unit",
+        }
     )
+
 
 print("Extracting cost and efficiency metrics...")
 # Self-joins to extract different cost metrics
@@ -227,143 +246,214 @@ print(f"Price rows found: {len(price_rows)}")
 
 if not price_rows.empty:
     # Clean and prepare price data
-    price_rows = price_rows[["model", "scenario", "region", "year", "Fuel", "col2", "value", "unit"]].copy()
+    price_rows = price_rows[
+        ["model", "scenario", "region", "year", "Fuel", "col2", "value", "unit"]
+    ].copy()
     # Removed dropna filtering - keep all price data
     price_rows = price_rows.rename(columns={"col2": "energy_type", "value": "price"})
-    
+
     print(f"Price rows after cleaning: {len(price_rows)}")
     print("Unique energy types:", price_rows["energy_type"].unique())
-    
+
     # Separate price data by energy type for different processing
     primary_prices = price_rows[price_rows["energy_type"] == "Primary Energy"].copy()
-    secondary_prices = price_rows[price_rows["energy_type"] == "Secondary Energy"].copy()
+    secondary_prices = price_rows[
+        price_rows["energy_type"] == "Secondary Energy"
+    ].copy()
     final_prices = price_rows[price_rows["energy_type"] == "Final Energy"].copy()
     carbon_prices = price_rows[price_rows["energy_type"] == "Carbon"].copy()
-    
+
     # Extract electricity-specific price data (separate columns)
-    secondary_electricity = secondary_prices[secondary_prices["Fuel"] == "Electricity"].copy()
+    secondary_electricity = secondary_prices[
+        secondary_prices["Fuel"] == "Electricity"
+    ].copy()
     final_electricity = final_prices[final_prices["Fuel"] == "Electricity"].copy()
-    
+
     # Start with filtered cost data
     final = filtered.copy()
-    
+
     # 1. FUEL-SPECIFIC PRIMARY ENERGY PRICES (Memory-Optimized)
     # Maps the primary energy price for whatever fuel is in the 'Fuel' column
     if not primary_prices.empty:
         print("Processing primary energy prices...")
-        
+
         # Memory-efficient approach: direct merge instead of pivot
         # Prepare price data with clean column names
-        primary_clean = primary_prices[["model", "scenario", "region", "year", "Fuel", "price", "unit"]].copy()
-        primary_clean = primary_clean.rename(columns={"price": "primary_energy_price", "unit": "primary_energy_price_unit"})
-        
+        primary_clean = primary_prices[
+            ["model", "scenario", "region", "year", "Fuel", "price", "unit"]
+        ].copy()
+        primary_clean = primary_clean.rename(
+            columns={
+                "price": "primary_energy_price",
+                "unit": "primary_energy_price_unit",
+            }
+        )
+
         # Removed extreme value filtering - keep all price data
-        
+
         # Merge directly on matching fuel
         final = final.merge(
-            primary_clean, 
-            on=["model", "scenario", "region", "year", "Fuel"], 
-            how="left"
+            primary_clean,
+            on=["model", "scenario", "region", "year", "Fuel"],
+            how="left",
         )
-        
-        print(f"     ✅ Added primary energy prices: {final['primary_energy_price'].notna().sum():,} values")
-        
+
+        print(
+            f"     ✅ Added primary energy prices: {final['primary_energy_price'].notna().sum():,} values"
+        )
+
     else:
         final["primary_energy_price"] = np.nan
         final["primary_energy_price_unit"] = np.nan
-    
+
     # 2. FUEL-SPECIFIC SECONDARY ENERGY PRICES (Memory-Optimized)
     # Maps the secondary energy price for whatever fuel is in the 'Fuel' column
     if not secondary_prices.empty:
         print("Processing secondary energy prices...")
-        
+
         # Memory-efficient approach: direct merge instead of pivot
-        secondary_clean = secondary_prices[["model", "scenario", "region", "year", "Fuel", "price", "unit"]].copy()
-        secondary_clean = secondary_clean.rename(columns={"price": "secondary_energy_price", "unit": "secondary_energy_price_unit"})
-        
+        secondary_clean = secondary_prices[
+            ["model", "scenario", "region", "year", "Fuel", "price", "unit"]
+        ].copy()
+        secondary_clean = secondary_clean.rename(
+            columns={
+                "price": "secondary_energy_price",
+                "unit": "secondary_energy_price_unit",
+            }
+        )
+
         # Removed extreme value filtering - keep all price data
-        
+
         # Merge directly on matching fuel
         final = final.merge(
-            secondary_clean, 
-            on=["model", "scenario", "region", "year", "Fuel"], 
-            how="left"
+            secondary_clean,
+            on=["model", "scenario", "region", "year", "Fuel"],
+            how="left",
         )
-        
-        print(f"     ✅ Added secondary energy prices: {final['secondary_energy_price'].notna().sum():,} values")
-        
+
+        print(
+            f"     ✅ Added secondary energy prices: {final['secondary_energy_price'].notna().sum():,} values"
+        )
+
     else:
         final["secondary_energy_price"] = np.nan
         final["secondary_energy_price_unit"] = np.nan
-    
+
     # 3. CARBON PRICE (single column, not fuel-specific)
     # All technologies face the same carbon price in a given model/scenario/region/year
     if not carbon_prices.empty:
         print("Processing carbon prices...")
-        
-        carbon_pivot = carbon_prices.groupby(["model", "scenario", "region", "year"])["price"].first().reset_index()
-        carbon_units_pivot = carbon_prices.groupby(["model", "scenario", "region", "year"])["unit"].first().reset_index()
-        
+
+        carbon_pivot = (
+            carbon_prices.groupby(["model", "scenario", "region", "year"])["price"]
+            .first()
+            .reset_index()
+        )
+        carbon_units_pivot = (
+            carbon_prices.groupby(["model", "scenario", "region", "year"])["unit"]
+            .first()
+            .reset_index()
+        )
+
         final = final.merge(
             carbon_pivot.rename(columns={"price": "carbon_price"}),
-            on=["model", "scenario", "region", "year"], how="left"
+            on=["model", "scenario", "region", "year"],
+            how="left",
         )
         final = final.merge(
             carbon_units_pivot.rename(columns={"unit": "carbon_price_unit"}),
-            on=["model", "scenario", "region", "year"], how="left"
+            on=["model", "scenario", "region", "year"],
+            how="left",
         )
     else:
         final["carbon_price"] = np.nan
         final["carbon_price_unit"] = np.nan
-    
+
     # 4. ELECTRICITY-SPECIFIC PRICES (separate columns for secondary and final energy)
     # These are separate from fuel-specific prices above because electricity is special
     if not secondary_electricity.empty:
         print("Processing secondary electricity prices...")
-        
-        sec_elec_pivot = secondary_electricity.groupby(["model", "scenario", "region", "year"])["price"].first().reset_index()
-        sec_elec_units_pivot = secondary_electricity.groupby(["model", "scenario", "region", "year"])["unit"].first().reset_index()
-        
+
+        sec_elec_pivot = (
+            secondary_electricity.groupby(["model", "scenario", "region", "year"])[
+                "price"
+            ]
+            .first()
+            .reset_index()
+        )
+        sec_elec_units_pivot = (
+            secondary_electricity.groupby(["model", "scenario", "region", "year"])[
+                "unit"
+            ]
+            .first()
+            .reset_index()
+        )
+
         final = final.merge(
-            sec_elec_pivot.rename(columns={"price": "secondary_energy_electricity_price"}),
-            on=["model", "scenario", "region", "year"], how="left"
+            sec_elec_pivot.rename(
+                columns={"price": "secondary_energy_electricity_price"}
+            ),
+            on=["model", "scenario", "region", "year"],
+            how="left",
         )
         final = final.merge(
-            sec_elec_units_pivot.rename(columns={"unit": "secondary_energy_electricity_price_unit"}),
-            on=["model", "scenario", "region", "year"], how="left"
+            sec_elec_units_pivot.rename(
+                columns={"unit": "secondary_energy_electricity_price_unit"}
+            ),
+            on=["model", "scenario", "region", "year"],
+            how="left",
         )
     else:
         final["secondary_energy_electricity_price"] = np.nan
         final["secondary_energy_electricity_price_unit"] = np.nan
-    
+
     if not final_electricity.empty:
         print("Processing final electricity prices...")
-        
-        final_elec_pivot = final_electricity.groupby(["model", "scenario", "region", "year"])["price"].first().reset_index()
-        final_elec_units_pivot = final_electricity.groupby(["model", "scenario", "region", "year"])["unit"].first().reset_index()
-        
+
+        final_elec_pivot = (
+            final_electricity.groupby(["model", "scenario", "region", "year"])["price"]
+            .first()
+            .reset_index()
+        )
+        final_elec_units_pivot = (
+            final_electricity.groupby(["model", "scenario", "region", "year"])["unit"]
+            .first()
+            .reset_index()
+        )
+
         final = final.merge(
-            final_elec_pivot.rename(columns={"price": "final_energy_electricity_price"}),
-            on=["model", "scenario", "region", "year"], how="left"
+            final_elec_pivot.rename(
+                columns={"price": "final_energy_electricity_price"}
+            ),
+            on=["model", "scenario", "region", "year"],
+            how="left",
         )
         final = final.merge(
-            final_elec_units_pivot.rename(columns={"unit": "final_energy_electricity_price_unit"}),
-            on=["model", "scenario", "region", "year"], how="left"
+            final_elec_units_pivot.rename(
+                columns={"unit": "final_energy_electricity_price_unit"}
+            ),
+            on=["model", "scenario", "region", "year"],
+            how="left",
         )
     else:
         final["final_energy_electricity_price"] = np.nan
         final["final_energy_electricity_price_unit"] = np.nan
-    
+
     print(f"Final data shape after price merge: {final.shape}")
-    
+
     # Report price data coverage
-    price_cols = ["primary_energy_price", "secondary_energy_price", "carbon_price", 
-                  "secondary_energy_electricity_price", "final_energy_electricity_price"]
+    price_cols = [
+        "primary_energy_price",
+        "secondary_energy_price",
+        "carbon_price",
+        "secondary_energy_electricity_price",
+        "final_energy_electricity_price",
+    ]
     for col in price_cols:
         if col in final.columns:
             non_na_count = final[col].notna().sum()
             print(f"{col}: {non_na_count} non-NA values")
-        
+
 else:
     print("No price data found, proceeding without price columns")
     final = filtered.copy()
@@ -398,20 +488,43 @@ print("Preparing final output...")
 # Define column order for final output
 final_cols = [
     # Core scenario data
-    "model", "scenario", "region", "variable", "value", "unit", "year",
+    "model",
+    "scenario",
+    "region",
+    "variable",
+    "value",
+    "unit",
+    "year",
     # Technology categorization
-    "Sector", "Subsector", "Technology", "Fuel", "CCS_flag",
+    "Sector",
+    "Subsector",
+    "Technology",
+    "Fuel",
+    "CCS_flag",
     # Cost metrics
-    "om_cost", "om_cost_unit", "efficiency", "efficiency_unit",
-    "capital_cost", "capital_cost_unit",
+    "om_cost",
+    "om_cost_unit",
+    "efficiency",
+    "efficiency_unit",
+    "capital_cost",
+    "capital_cost_unit",
     # Price data (if available)
-    "primary_energy_price", "primary_energy_price_unit",
-    "secondary_energy_price", "secondary_energy_price_unit", 
-    "carbon_price", "carbon_price_unit",
-    "secondary_energy_electricity_price", "secondary_energy_electricity_price_unit",
-    "final_energy_electricity_price", "final_energy_electricity_price_unit",
+    "primary_energy_price",
+    "primary_energy_price_unit",
+    "secondary_energy_price",
+    "secondary_energy_price_unit",
+    "carbon_price",
+    "carbon_price_unit",
+    "secondary_energy_electricity_price",
+    "secondary_energy_electricity_price_unit",
+    "final_energy_electricity_price",
+    "final_energy_electricity_price_unit",
     # Additional mapping columns
-    "col1", "col2", "col3", "col4", "col5"
+    "col1",
+    "col2",
+    "col3",
+    "col4",
+    "col5",
 ]
 
 # Select only columns that exist in the dataframe
@@ -429,9 +542,9 @@ print(f"Output written to {OUTPUT_FILE}")
 ## SUMMARY AND VALIDATION
 ## =============================================================================
 
-print("\n" + "="*60)
+print("\n" + "=" * 60)
 print("PROCESSING SUMMARY")
-print("="*60)
+print("=" * 60)
 
 print(f"Dataset: {DATASET_TYPE}")
 print(f"Final dataset: {len(final):,} rows × {len(final.columns)} columns")
@@ -440,6 +553,6 @@ print(f"Unique scenarios: {final['scenario'].nunique()}")
 print(f"Unique regions: {final['region'].nunique()}")
 print(f"Year range: {final['year'].min()}-{final['year'].max()}")
 
-print("\n" + "="*60)
+print("\n" + "=" * 60)
 print("PROCESSING COMPLETE!")
-print("="*60)
+print("=" * 60)
