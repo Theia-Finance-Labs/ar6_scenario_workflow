@@ -39,6 +39,7 @@ import numpy as np
 # Shared Utilities and Conversions
 # ================================
 
+
 def print_banner(title: str) -> None:
     line = "=" * 80
     print(f"\n{line}\n{title}\n{line}")
@@ -69,6 +70,7 @@ def memory_release(*objs) -> None:
 # Step 1: Format AR6 (ISO3 & R10)
 # ================================
 
+
 def step1_process_dataset(dataset_type: str) -> Optional[str]:
     """
     Process either ISO3 or R10 dataset into the intermediate CSV used by Step 2.
@@ -93,12 +95,12 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
 
     try:
         source = pd.read_feather(input_file)
-        
+
         # Early filter for WITCH 5.0 to improve performance
         print(f"   Before WITCH 5.0 filter: {source.shape[0]:,} rows")
         source = source[source["Model"] == "WITCH 5.0"]
         print(f"   After WITCH 5.0 filter: {source.shape[0]:,} rows")
-        
+
         if source.empty:
             print("❌ No data found for WITCH 5.0 model")
             return None
@@ -122,7 +124,9 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
         print("❌ No year columns found in range (2021-2050)")
         return None
 
-    print(f"Year columns for analysis: {len(year_cols)} | Range: {min(year_cols)}–{max(year_cols)}")
+    print(
+        f"Year columns for analysis: {len(year_cols)} | Range: {min(year_cols)}–{max(year_cols)}"
+    )
 
     melted = pd.melt(
         source,
@@ -146,7 +150,9 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
         }
     )
 
-    base_data = renamed.merge(mapping, how="left", left_on="variable", right_on="variable")
+    base_data = renamed.merge(
+        mapping, how="left", left_on="variable", right_on="variable"
+    )
 
     # Drop rows with missing Sector mapping
     before_sector = len(base_data)
@@ -156,7 +162,15 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
         f"Sector mapping: kept {after_sector:,}/{before_sector:,} rows; removed {before_sector-after_sector:,}"
     )
 
-    target_sectors = ["Steel", "Nuclear", "Gas&Oil", "Cement", "Coal", "Renewables", "Power"]
+    target_sectors = [
+        "Steel",
+        "Nuclear",
+        "Gas&Oil",
+        "Cement",
+        "Coal",
+        "Renewables",
+        "Power",
+    ]
     before_filter = len(base_data)
     base_data = base_data[base_data["Sector"].isin(target_sectors)].copy()
     after_filter = len(base_data)
@@ -178,10 +192,18 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
     def extract_metric(df: pd.DataFrame, metric: str) -> pd.DataFrame:
         subset = df[df["col1"] == metric]
         if subset.empty:
-            return pd.DataFrame(columns=join_cols + [metric.lower().replace(" ", "_"), f"{metric.lower().replace(' ', '_')}_unit"])
-        return (
-            subset[join_cols + ["value", "unit"]]
-            .rename(columns={"value": metric.lower().replace(" ", "_"), "unit": f"{metric.lower().replace(' ', '_')}_unit"})
+            return pd.DataFrame(
+                columns=join_cols
+                + [
+                    metric.lower().replace(" ", "_"),
+                    f"{metric.lower().replace(' ', '_')}_unit",
+                ]
+            )
+        return subset[join_cols + ["value", "unit"]].rename(
+            columns={
+                "value": metric.lower().replace(" ", "_"),
+                "unit": f"{metric.lower().replace(' ', '_')}_unit",
+            }
         )
 
     print("Extracting OM Cost / Capital Cost / Efficiency …")
@@ -190,24 +212,45 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
     efficiency = extract_metric(base_data, "Efficiency")
 
     merged = base_data.copy()
-    merged = merged.merge(om_cost, on=join_cols, how="left") if not om_cost.empty else merged
-    merged = merged.merge(efficiency, on=join_cols, how="left") if not efficiency.empty else merged
-    merged = merged.merge(cap_cost, on=join_cols, how="left") if not cap_cost.empty else merged
+    merged = (
+        merged.merge(om_cost, on=join_cols, how="left") if not om_cost.empty else merged
+    )
+    merged = (
+        merged.merge(efficiency, on=join_cols, how="left")
+        if not efficiency.empty
+        else merged
+    )
+    merged = (
+        merged.merge(cap_cost, on=join_cols, how="left")
+        if not cap_cost.empty
+        else merged
+    )
 
     # Price data (keep all; unit conversions later)
     price_rows = base_data[base_data["col1"] == "Price"].copy()
     if not price_rows.empty:
-        price_rows = price_rows.rename(columns={"col2": "energy_type", "value": "price"})
-        primary_prices = price_rows[price_rows["energy_type"] == "Primary Energy"].copy()
-        secondary_prices = price_rows[price_rows["energy_type"] == "Secondary Energy"].copy()
+        price_rows = price_rows.rename(
+            columns={"col2": "energy_type", "value": "price"}
+        )
+        primary_prices = price_rows[
+            price_rows["energy_type"] == "Primary Energy"
+        ].copy()
+        secondary_prices = price_rows[
+            price_rows["energy_type"] == "Secondary Energy"
+        ].copy()
         final_prices = price_rows[price_rows["energy_type"] == "Final Energy"].copy()
         carbon_prices = price_rows[price_rows["energy_type"] == "Carbon"].copy()
 
         # Primary energy (fuel-specific via Fuel)
         if not primary_prices.empty:
-            primary_clean = primary_prices[["model", "scenario", "region", "year", "Fuel", "price", "unit"]].copy()
+            primary_clean = primary_prices[
+                ["model", "scenario", "region", "year", "Fuel", "price", "unit"]
+            ].copy()
             primary_clean = primary_clean.rename(
-                columns={"price": "primary_energy_price", "unit": "primary_energy_price_unit"}
+                columns={
+                    "price": "primary_energy_price",
+                    "unit": "primary_energy_price_unit",
+                }
             )
             merged = merged.merge(
                 primary_clean,
@@ -217,9 +260,14 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
 
         # Secondary energy (fuel-specific)
         if not secondary_prices.empty:
-            secondary_clean = secondary_prices[["model", "scenario", "region", "year", "Fuel", "price", "unit"]].copy()
+            secondary_clean = secondary_prices[
+                ["model", "scenario", "region", "year", "Fuel", "price", "unit"]
+            ].copy()
             secondary_clean = secondary_clean.rename(
-                columns={"price": "secondary_energy_price", "unit": "secondary_energy_price_unit"}
+                columns={
+                    "price": "secondary_energy_price",
+                    "unit": "secondary_energy_price_unit",
+                }
             )
             merged = merged.merge(
                 secondary_clean,
@@ -229,8 +277,20 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
 
         # Carbon price (single per model/scenario/region/year)
         if not carbon_prices.empty:
-            carbon_pivot = carbon_prices.groupby(["model", "scenario", "region", "year"][0:4])["price"].first().reset_index()
-            carbon_units = carbon_prices.groupby(["model", "scenario", "region", "year"][0:4])["unit"].first().reset_index()
+            carbon_pivot = (
+                carbon_prices.groupby(["model", "scenario", "region", "year"][0:4])[
+                    "price"
+                ]
+                .first()
+                .reset_index()
+            )
+            carbon_units = (
+                carbon_prices.groupby(["model", "scenario", "region", "year"][0:4])[
+                    "unit"
+                ]
+                .first()
+                .reset_index()
+            )
             merged = merged.merge(
                 carbon_pivot.rename(columns={"price": "carbon_price"}),
                 on=["model", "scenario", "region", "year"],
@@ -243,32 +303,64 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
             )
 
         # Secondary electricity & final electricity (special)
-        secondary_electricity = secondary_prices[secondary_prices["Fuel"] == "Electricity"].copy()
+        secondary_electricity = secondary_prices[
+            secondary_prices["Fuel"] == "Electricity"
+        ].copy()
         if not secondary_electricity.empty:
-            sec_elec = secondary_electricity.groupby(["model", "scenario", "region", "year"][0:4])["price"].first().reset_index()
-            sec_elec_u = secondary_electricity.groupby(["model", "scenario", "region", "year"][0:4])["unit"].first().reset_index()
+            sec_elec = (
+                secondary_electricity.groupby(
+                    ["model", "scenario", "region", "year"][0:4]
+                )["price"]
+                .first()
+                .reset_index()
+            )
+            sec_elec_u = (
+                secondary_electricity.groupby(
+                    ["model", "scenario", "region", "year"][0:4]
+                )["unit"]
+                .first()
+                .reset_index()
+            )
             merged = merged.merge(
-                sec_elec.rename(columns={"price": "secondary_energy_electricity_price"}),
+                sec_elec.rename(
+                    columns={"price": "secondary_energy_electricity_price"}
+                ),
                 on=["model", "scenario", "region", "year"],
                 how="left",
             )
             merged = merged.merge(
-                sec_elec_u.rename(columns={"unit": "secondary_energy_electricity_price_unit"}),
+                sec_elec_u.rename(
+                    columns={"unit": "secondary_energy_electricity_price_unit"}
+                ),
                 on=["model", "scenario", "region", "year"],
                 how="left",
             )
 
         final_electricity = final_prices[final_prices["Fuel"] == "Electricity"].copy()
         if not final_electricity.empty:
-            fin_elec = final_electricity.groupby(["model", "scenario", "region", "year"][0:4])["price"].first().reset_index()
-            fin_elec_u = final_electricity.groupby(["model", "scenario", "region", "year"][0:4])["unit"].first().reset_index()
+            fin_elec = (
+                final_electricity.groupby(["model", "scenario", "region", "year"][0:4])[
+                    "price"
+                ]
+                .first()
+                .reset_index()
+            )
+            fin_elec_u = (
+                final_electricity.groupby(["model", "scenario", "region", "year"][0:4])[
+                    "unit"
+                ]
+                .first()
+                .reset_index()
+            )
             merged = merged.merge(
                 fin_elec.rename(columns={"price": "final_energy_electricity_price"}),
                 on=["model", "scenario", "region", "year"],
                 how="left",
             )
             merged = merged.merge(
-                fin_elec_u.rename(columns={"unit": "final_energy_electricity_price_unit"}),
+                fin_elec_u.rename(
+                    columns={"unit": "final_energy_electricity_price_unit"}
+                ),
                 on=["model", "scenario", "region", "year"],
                 how="left",
             )
@@ -313,7 +405,18 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
     merged[final_cols].to_csv(output_file, index=False)
     print(f"✅ Wrote {output_file} | Shape: {merged[final_cols].shape}")
 
-    memory_release(source, mapping, melted, renamed, base_data, om_cost, cap_cost, efficiency, price_rows, merged)
+    memory_release(
+        source,
+        mapping,
+        melted,
+        renamed,
+        base_data,
+        om_cost,
+        cap_cost,
+        efficiency,
+        price_rows,
+        merged,
+    )
     return output_file
 
 
@@ -326,6 +429,7 @@ def step1_run() -> None:
 # =============================================
 # Step 2: Filter, Pivot, Unit Standardization
 # =============================================
+
 
 def step2_filter_and_pivot() -> None:
     print_banner("STEP 2 — Filter, Pivot, Merge Costs & Prices, Convert Units")
@@ -377,10 +481,9 @@ def step2_filter_and_pivot() -> None:
     ]
     grouping_cols = [c for c in grouping_cols if c in df_filtered.columns]
 
-    pivoted = (
-        df_filtered.pivot_table(index=grouping_cols, columns="col1", values="value", aggfunc="first")
-        .reset_index()
-    )
+    pivoted = df_filtered.pivot_table(
+        index=grouping_cols, columns="col1", values="value", aggfunc="first"
+    ).reset_index()
     pivoted.columns.name = None
     rename_map: Dict[str, str] = {}
     for col in pivoted.columns:
@@ -391,7 +494,18 @@ def step2_filter_and_pivot() -> None:
     pivoted = pivoted.rename(columns=rename_map)
 
     # Join keys used for all merges
-    join_cols = [c for c in ["model", "scenario", "scenario_geography", "year", "Sector", "Technology"] if c in df_filtered.columns and c in pivoted.columns]
+    join_cols = [
+        c
+        for c in [
+            "model",
+            "scenario",
+            "scenario_geography",
+            "year",
+            "Sector",
+            "Technology",
+        ]
+        if c in df_filtered.columns and c in pivoted.columns
+    ]
 
     # Unit-aware conversions BEFORE cost merges to ensure correct base columns
     # 1) Capacity → MW (supports kW/MW/GW)
@@ -405,8 +519,11 @@ def step2_filter_and_pivot() -> None:
         cap_mw.loc[u.str.contains("kw")] = cap_mw.loc[u.str.contains("kw")] / 1000.0
         # Unknown units → leave as-is
         cap_df["capacity_mw"] = cap_mw
-        cap_df = cap_df.drop(columns=["value", "unit"])\
-                         .groupby(join_cols, as_index=False)["capacity_mw"].first()
+        cap_df = (
+            cap_df.drop(columns=["value", "unit"])
+            .groupby(join_cols, as_index=False)["capacity_mw"]
+            .first()
+        )
         pivoted = pivoted.merge(cap_df, on=join_cols, how="left")
         pivoted = pivoted.drop(columns=["capacity_value"], errors="ignore")
 
@@ -416,15 +533,24 @@ def step2_filter_and_pivot() -> None:
         add_df = add_rows[join_cols + ["value", "unit"]].copy()
         u = add_df["unit"].astype(str).str.lower()
         add_mwyr = add_df["value"].astype(float)
-        gwyr_mask = u.str.contains("gw") & (u.str.contains("/yr") | u.str.contains("yr-1"))
-        mwy_mask = u.str.contains("mw") & (u.str.contains("/yr") | u.str.contains("yr-1"))
-        kwyr_mask = u.str.contains("kw") & (u.str.contains("/yr") | u.str.contains("yr-1"))
+        gwyr_mask = u.str.contains("gw") & (
+            u.str.contains("/yr") | u.str.contains("yr-1")
+        )
+        mwy_mask = u.str.contains("mw") & (
+            u.str.contains("/yr") | u.str.contains("yr-1")
+        )
+        kwyr_mask = u.str.contains("kw") & (
+            u.str.contains("/yr") | u.str.contains("yr-1")
+        )
         add_mwyr.loc[gwyr_mask] = add_mwyr.loc[gwyr_mask] * 1000.0
         add_mwyr.loc[mwy_mask] = add_mwyr.loc[mwy_mask] * 1.0
         add_mwyr.loc[kwyr_mask] = add_mwyr.loc[kwyr_mask] / 1000.0
         add_df["capacity_additions_mw_per_yr"] = add_mwyr
-        add_df = add_df.drop(columns=["value", "unit"])\
-                       .groupby(join_cols, as_index=False)["capacity_additions_mw_per_yr"].first()
+        add_df = (
+            add_df.drop(columns=["value", "unit"])
+            .groupby(join_cols, as_index=False)["capacity_additions_mw_per_yr"]
+            .first()
+        )
         pivoted = pivoted.merge(add_df, on=join_cols, how="left")
         pivoted = pivoted.drop(columns=["capacity_additions_value"], errors="ignore")
 
@@ -443,29 +569,53 @@ def step2_filter_and_pivot() -> None:
     pri_rows = df_filtered[df_filtered["col1"] == "Primary Energy"]
     if not pri_rows.empty:
         pri_df = pri_rows[join_cols + ["value", "unit"]].copy()
-        pri_df["primary_energy_mwh_per_yr"] = energy_units_to_mwh(pri_df["value"], pri_df["unit"])\
-            .replace([np.inf, -np.inf], np.nan)
-        pri_df = pri_df.drop(columns=["value", "unit"])\
-                       .groupby(join_cols, as_index=False)["primary_energy_mwh_per_yr"].first()
+        pri_df["primary_energy_mwh_per_yr"] = energy_units_to_mwh(
+            pri_df["value"], pri_df["unit"]
+        ).replace([np.inf, -np.inf], np.nan)
+        pri_df = (
+            pri_df.drop(columns=["value", "unit"])
+            .groupby(join_cols, as_index=False)["primary_energy_mwh_per_yr"]
+            .first()
+        )
         pivoted = pivoted.merge(pri_df, on=join_cols, how="left")
         pivoted = pivoted.drop(columns=["primary_energy_value"], errors="ignore")
 
     sec_rows = df_filtered[df_filtered["col1"] == "Secondary Energy"]
     if not sec_rows.empty:
         sec_df = sec_rows[join_cols + ["value", "unit"]].copy()
-        sec_df["secondary_energy_mwh_per_yr"] = energy_units_to_mwh(sec_df["value"], sec_df["unit"])\
-            .replace([np.inf, -np.inf], np.nan)
-        sec_df = sec_df.drop(columns=["value", "unit"])\
-                       .groupby(join_cols, as_index=False)["secondary_energy_mwh_per_yr"].first()
+        sec_df["secondary_energy_mwh_per_yr"] = energy_units_to_mwh(
+            sec_df["value"], sec_df["unit"]
+        ).replace([np.inf, -np.inf], np.nan)
+        sec_df = (
+            sec_df.drop(columns=["value", "unit"])
+            .groupby(join_cols, as_index=False)["secondary_energy_mwh_per_yr"]
+            .first()
+        )
         pivoted = pivoted.merge(sec_df, on=join_cols, how="left")
         pivoted = pivoted.drop(columns=["secondary_energy_value"], errors="ignore")
 
     # Merge cost metrics from original df (non-pivoted)
     cost_data = df[~df["col1"].isin(target_col1_values)].copy()
     # refresh join_cols to ensure overlap with cost_data
-    join_cols = [c for c in ["model", "scenario", "scenario_geography", "year", "Sector", "Technology"] if c in cost_data.columns and c in pivoted.columns]
+    join_cols = [
+        c
+        for c in [
+            "model",
+            "scenario",
+            "scenario_geography",
+            "year",
+            "Sector",
+            "Technology",
+        ]
+        if c in cost_data.columns and c in pivoted.columns
+    ]
 
-    def add_cost_metric(pivoted_df: pd.DataFrame, cost_df: pd.DataFrame, metric_name: str, join_cols: List[str]) -> pd.DataFrame:
+    def add_cost_metric(
+        pivoted_df: pd.DataFrame,
+        cost_df: pd.DataFrame,
+        metric_name: str,
+        join_cols: List[str],
+    ) -> pd.DataFrame:
         metric_df = cost_df[cost_df["col1"] == metric_name].copy()
         if metric_df.empty:
             # Return original df if the metric is missing
@@ -480,8 +630,15 @@ def step2_filter_and_pivot() -> None:
             # Best-effort naming
             unit_mode = metric_df["unit"].mode()
             unit_str = unit_mode.iloc[0] if not unit_mode.empty else ""
-            unit_clean = unit_str.replace("US$2010/", "").replace("/", "_per_").replace(" ", "_").lower()
-            col_name = metric_name.lower().replace(" ", "_") + (f"_{unit_clean}" if unit_clean else "")
+            unit_clean = (
+                unit_str.replace("US$2010/", "")
+                .replace("/", "_per_")
+                .replace(" ", "_")
+                .lower()
+            )
+            col_name = metric_name.lower().replace(" ", "_") + (
+                f"_{unit_clean}" if unit_clean else ""
+            )
         metric_df = metric_df[join_cols + ["value"]].rename(columns={"value": col_name})
         return pivoted_df.merge(metric_df, on=join_cols, how="left")
 
@@ -493,7 +650,9 @@ def step2_filter_and_pivot() -> None:
     for unit_col in ["om_cost_unit", "capital_cost_unit", "efficiency_unit"]:
         if unit_col in cost_data.columns:
             unit_df = (
-                cost_data[join_cols + [unit_col]].dropna(subset=[unit_col]).drop_duplicates()
+                cost_data[join_cols + [unit_col]]
+                .dropna(subset=[unit_col])
+                .drop_duplicates()
             )
             pivoted = pivoted.merge(unit_df, on=join_cols, how="left")
 
@@ -506,10 +665,18 @@ def step2_filter_and_pivot() -> None:
     # Carbon price (if available in original df)
     if set(["carbon_price", "carbon_price_unit"]).issubset(df.columns):
         price_join_cols = join_cols
-        carbon_data = df[price_join_cols + ["carbon_price", "carbon_price_unit"]].dropna(subset=["carbon_price"]).drop_duplicates()
+        carbon_data = (
+            df[price_join_cols + ["carbon_price", "carbon_price_unit"]]
+            .dropna(subset=["carbon_price"])
+            .drop_duplicates()
+        )
         if not carbon_data.empty:
-            carbon_data = carbon_data.rename(columns={"carbon_price": "carbon_price_usd_per_tco2"})
-            carbon_data = carbon_data.drop(columns=["carbon_price_unit"], errors="ignore")
+            carbon_data = carbon_data.rename(
+                columns={"carbon_price": "carbon_price_usd_per_tco2"}
+            )
+            carbon_data = carbon_data.drop(
+                columns=["carbon_price_unit"], errors="ignore"
+            )
             pivoted = pivoted.merge(carbon_data, on=price_join_cols, how="left")
         else:
             pivoted["carbon_price_usd_per_tco2"] = np.nan
@@ -525,7 +692,11 @@ def step2_filter_and_pivot() -> None:
             pivoted[price_col + "_usd_per_gj"] = np.nan
             pivoted[unit_col] = np.nan
             return pivoted
-        price_df = df_source[join_cols + [price_col, unit_col]].dropna(subset=[price_col]).drop_duplicates()
+        price_df = (
+            df_source[join_cols + [price_col, unit_col]]
+            .dropna(subset=[price_col])
+            .drop_duplicates()
+        )
         if price_df.empty:
             pivoted[price_col + "_usd_per_gj"] = np.nan
             pivoted[unit_col] = np.nan
@@ -537,11 +708,22 @@ def step2_filter_and_pivot() -> None:
     pivoted = merge_energy_price(df, "secondary")
 
     # Secondary electricity price (USD/GJ)
-    sec_elec_cols = ["secondary_energy_electricity_price", "secondary_energy_electricity_price_unit"]
+    sec_elec_cols = [
+        "secondary_energy_electricity_price",
+        "secondary_energy_electricity_price_unit",
+    ]
     if set(sec_elec_cols).issubset(df.columns):
-        tmp = df[join_cols + sec_elec_cols].dropna(subset=[sec_elec_cols[0]]).drop_duplicates()
+        tmp = (
+            df[join_cols + sec_elec_cols]
+            .dropna(subset=[sec_elec_cols[0]])
+            .drop_duplicates()
+        )
         if not tmp.empty:
-            tmp = tmp.rename(columns={sec_elec_cols[0]: "secondary_energy_electricity_price_usd_per_gj"})
+            tmp = tmp.rename(
+                columns={
+                    sec_elec_cols[0]: "secondary_energy_electricity_price_usd_per_gj"
+                }
+            )
             tmp = tmp.drop(columns=[sec_elec_cols[1]], errors="ignore")
             pivoted = pivoted.merge(tmp, on=join_cols, how="left")
         else:
@@ -552,16 +734,22 @@ def step2_filter_and_pivot() -> None:
     # Unit conversions to target schema units
     # Capacity → MW
     if "capacity_value" in pivoted.columns:
-        pivoted["capacity_mw"] = pivoted["capacity_value"] * 1000.0  # GW→MW or MW→MW if already in MW (ok if data was MW)
+        pivoted["capacity_mw"] = (
+            pivoted["capacity_value"] * 1000.0
+        )  # GW→MW or MW→MW if already in MW (ok if data was MW)
         pivoted = pivoted.drop(columns=["capacity_value"], errors="ignore")
 
     # Capacity additions → MW/yr
     if "capacity_additions_value" in pivoted.columns:
-        pivoted["capacity_additions_mw_per_yr"] = pivoted["capacity_additions_value"] * 1000.0
+        pivoted["capacity_additions_mw_per_yr"] = (
+            pivoted["capacity_additions_value"] * 1000.0
+        )
         pivoted = pivoted.drop(columns=["capacity_additions_value"], errors="ignore")
 
     # Energy (Primary/Secondary) → MWh/yr with mixed units handled via source 'unit' column if available
-    def energy_to_mwh_per_year(df_in: pd.DataFrame, value_col: str, unit_series: Optional[pd.Series]) -> pd.Series:
+    def energy_to_mwh_per_year(
+        df_in: pd.DataFrame, value_col: str, unit_series: Optional[pd.Series]
+    ) -> pd.Series:
         if value_col not in df_in.columns:
             return pd.Series(index=df_in.index, dtype=float)
         values = df_in[value_col].copy()
@@ -569,9 +757,21 @@ def step2_filter_and_pivot() -> None:
             # Assume EJ/yr if unknown; convert EJ → MWh
             return values * (1e18 / 3.6e9)
         # Per-row conversions using unit column
-        ej_mask = unit_series.isin(["EJ/yr", "EJ yr-1"]) if unit_series is not None else pd.Series(False, index=df_in.index)
-        pj_mask = unit_series.isin(["PJ/yr", "PJ yr-1"]) if unit_series is not None else pd.Series(False, index=df_in.index)
-        tj_mask = unit_series.isin(["TJ/yr", "TJ yr-1"]) if unit_series is not None else pd.Series(False, index=df_in.index)
+        ej_mask = (
+            unit_series.isin(["EJ/yr", "EJ yr-1"])
+            if unit_series is not None
+            else pd.Series(False, index=df_in.index)
+        )
+        pj_mask = (
+            unit_series.isin(["PJ/yr", "PJ yr-1"])
+            if unit_series is not None
+            else pd.Series(False, index=df_in.index)
+        )
+        tj_mask = (
+            unit_series.isin(["TJ/yr", "TJ yr-1"])
+            if unit_series is not None
+            else pd.Series(False, index=df_in.index)
+        )
         out = values.copy()
         out.loc[ej_mask] = values.loc[ej_mask] * (1e18 / 3.6e9)
         out.loc[pj_mask] = values.loc[pj_mask] * (1e15 / 3.6e9)
@@ -580,10 +780,14 @@ def step2_filter_and_pivot() -> None:
 
     # We lost row-level unit for energy in pivot; fallback to EJ/yr assumption as in prior script when unknown
     if "secondary_energy_value" in pivoted.columns:
-        pivoted["secondary_energy_mwh_per_yr"] = energy_to_mwh_per_year(pivoted, "secondary_energy_value", None)
+        pivoted["secondary_energy_mwh_per_yr"] = energy_to_mwh_per_year(
+            pivoted, "secondary_energy_value", None
+        )
         pivoted = pivoted.drop(columns=["secondary_energy_value"], errors="ignore")
     if "primary_energy_value" in pivoted.columns:
-        pivoted["primary_energy_mwh_per_yr"] = energy_to_mwh_per_year(pivoted, "primary_energy_value", None)
+        pivoted["primary_energy_mwh_per_yr"] = energy_to_mwh_per_year(
+            pivoted, "primary_energy_value", None
+        )
         pivoted = pivoted.drop(columns=["primary_energy_value"], errors="ignore")
 
     # Lifetime → years (already years in most cases)
@@ -592,7 +796,9 @@ def step2_filter_and_pivot() -> None:
         pivoted = pivoted.drop(columns=["lifetime_value"], errors="ignore")
 
     # Cost conversions: unit-aware to MW or MW/yr; clean zeros/negatives
-    def convert_capacity_cost_to_mw(values: pd.Series, units: Optional[pd.Series], per_year: bool) -> pd.Series:
+    def convert_capacity_cost_to_mw(
+        values: pd.Series, units: Optional[pd.Series], per_year: bool
+    ) -> pd.Series:
         out = values.astype(float).copy()
         out.loc[out <= 0] = np.nan
         if units is None:
@@ -612,7 +818,11 @@ def step2_filter_and_pivot() -> None:
         )
 
     if "capital_cost_usd_per_mw" in pivoted.columns:
-        units = pivoted["capital_cost_unit"] if "capital_cost_unit" in pivoted.columns else None
+        units = (
+            pivoted["capital_cost_unit"]
+            if "capital_cost_unit" in pivoted.columns
+            else None
+        )
         pivoted["capital_cost_usd_per_mw"] = convert_capacity_cost_to_mw(
             pivoted["capital_cost_usd_per_mw"], units, per_year=False
         )
@@ -623,7 +833,9 @@ def step2_filter_and_pivot() -> None:
         pivoted.loc[zero_eff_mask, "efficiency_percent"] = np.nan
         pivoted["efficiency_decimal"] = pivoted["efficiency_percent"]
         percent_mask = pivoted["efficiency_percent"] > 1
-        pivoted.loc[percent_mask, "efficiency_decimal"] = pivoted.loc[percent_mask, "efficiency_percent"] / 100.0
+        pivoted.loc[percent_mask, "efficiency_decimal"] = (
+            pivoted.loc[percent_mask, "efficiency_percent"] / 100.0
+        )
         pivoted = pivoted.drop(columns=["efficiency_percent"], errors="ignore")
 
     # Save and free memory
@@ -636,6 +848,7 @@ def step2_filter_and_pivot() -> None:
 # =====================================
 # Step 3: Finalize to Target AR6 Schema
 # =====================================
+
 
 def convert_energy_price_to_mwh(price_value: float, unit: str) -> float:
     if pd.isna(price_value) or pd.isna(unit):
@@ -669,38 +882,46 @@ def load_step1_for_price() -> Optional[pd.DataFrame]:
 
 def _normalize_fuel_label(label: str) -> str:
     s = str(label).strip().lower()
-    if not s or s == 'nan':
-        return ''
-    if 'electric' in s:
-        return 'Electricity'
-    if 'gas' in s or 'gases' in s:
-        return 'Gas'
-    if 'oil' in s or 'liquid' in s or 'liquids' in s:
-        return 'Oil'
-    if 'coal' in s or 'solid' in s or 'solids' in s:
-        return 'Coal'
-    if 'biomass' in s or s.startswith('bio'):
-        return 'Biomass'
-    if 'nuclear' in s:
-        return 'Nuclear'
-    if 'hydro' in s:
-        return 'Hydro'
-    if 'solar' in s:
-        return 'Solar'
-    if 'wind' in s:
-        return 'Wind'
-    if 'geothermal' in s:
-        return 'Geothermal'
+    if not s or s == "nan":
+        return ""
+    if "electric" in s:
+        return "Electricity"
+    if "gas" in s or "gases" in s:
+        return "Gas"
+    if "oil" in s or "liquid" in s or "liquids" in s:
+        return "Oil"
+    if "coal" in s or "solid" in s or "solids" in s:
+        return "Coal"
+    if "biomass" in s or s.startswith("bio"):
+        return "Biomass"
+    if "nuclear" in s:
+        return "Nuclear"
+    if "hydro" in s:
+        return "Hydro"
+    if "solar" in s:
+        return "Solar"
+    if "wind" in s:
+        return "Wind"
+    if "geothermal" in s:
+        return "Geothermal"
     return s.title()
 
 
 def build_price_tables(step1_df: Optional[pd.DataFrame]) -> Dict[str, pd.DataFrame]:
     if step1_df is None:
-        return {"elec": pd.DataFrame(), "primary": pd.DataFrame(), "secondary_by_fuel": pd.DataFrame()}
+        return {
+            "elec": pd.DataFrame(),
+            "primary": pd.DataFrame(),
+            "secondary_by_fuel": pd.DataFrame(),
+        }
 
     prices = step1_df[step1_df["col1"] == "Price"].copy()
     if prices.empty:
-        return {"elec": pd.DataFrame(), "primary": pd.DataFrame(), "secondary_by_fuel": pd.DataFrame()}
+        return {
+            "elec": pd.DataFrame(),
+            "primary": pd.DataFrame(),
+            "secondary_by_fuel": pd.DataFrame(),
+        }
 
     # Vectorized price conversion to USD/MWh
     unit_lower = prices["unit"].astype(str).str.lower()
@@ -720,21 +941,25 @@ def build_price_tables(step1_df: Optional[pd.DataFrame]) -> Dict[str, pd.DataFra
     prices["Fuel_norm"] = prices["Fuel"].apply(_normalize_fuel_label)
 
     # Electricity (Secondary Energy, Electricity fuel)
-    elec = prices[(prices["col2"] == "Secondary Energy") & (prices["Fuel_norm"] == "Electricity")][[
-        "model", "scenario", "region", "year", "price_usd_per_mwh"
-    ]].copy()
-    elec = elec.groupby(["model", "scenario", "region", "year"], as_index=False)["price_usd_per_mwh"].first()
+    elec = prices[
+        (prices["col2"] == "Secondary Energy") & (prices["Fuel_norm"] == "Electricity")
+    ][["model", "scenario", "region", "year", "price_usd_per_mwh"]].copy()
+    elec = elec.groupby(["model", "scenario", "region", "year"], as_index=False)[
+        "price_usd_per_mwh"
+    ].first()
 
     # Primary energy (not fuel-specific; take first per group)
-    primary = prices[(prices["col2"] == "Primary Energy")][[
-        "model", "scenario", "region", "year", "price_usd_per_mwh"
-    ]].copy()
-    primary = primary.groupby(["model", "scenario", "region", "year"], as_index=False)["price_usd_per_mwh"].first()
+    primary = prices[(prices["col2"] == "Primary Energy")][
+        ["model", "scenario", "region", "year", "price_usd_per_mwh"]
+    ].copy()
+    primary = primary.groupby(["model", "scenario", "region", "year"], as_index=False)[
+        "price_usd_per_mwh"
+    ].first()
 
     # Secondary energy by fuel (fuel-specific table)
-    secondary_by_fuel = prices[(prices["col2"] == "Secondary Energy")][[
-        "model", "scenario", "region", "year", "Fuel_norm", "price_usd_per_mwh"
-    ]].copy()
+    secondary_by_fuel = prices[(prices["col2"] == "Secondary Energy")][
+        ["model", "scenario", "region", "year", "Fuel_norm", "price_usd_per_mwh"]
+    ].copy()
     secondary_by_fuel = secondary_by_fuel.groupby(
         ["model", "scenario", "region", "year", "Fuel_norm"], as_index=False
     )["price_usd_per_mwh"].first()
@@ -757,12 +982,21 @@ def step3_finalize_target_schema() -> None:
     # Load metadata for scenario_type (if present)
     target["scenario_type"] = ""
     try:
-        meta_df = pd.read_excel("AR6_Scenarios_Database_metadata_indicators_v1.1 2.xlsx", sheet_name="meta_Ch3vetted_withclimate")
+        meta_df = pd.read_excel(
+            "AR6_Scenarios_Database_metadata_indicators_v1.1 2.xlsx",
+            sheet_name="meta_Ch3vetted_withclimate",
+        )
         if set(["Model", "Scenario", "Category"]).issubset(meta_df.columns):
             meta_df = meta_df[["Model", "Scenario", "Category"]].dropna()
-            meta_df["lookup_key"] = meta_df["Model"].astype(str) + "|||" + meta_df["Scenario"].astype(str)
+            meta_df["lookup_key"] = (
+                meta_df["Model"].astype(str) + "|||" + meta_df["Scenario"].astype(str)
+            )
             lookup = meta_df.set_index("lookup_key")["Category"].to_dict()
-            key = target["scenario_provider"].astype(str) + "|||" + target["scenario"].astype(str)
+            key = (
+                target["scenario_provider"].astype(str)
+                + "|||"
+                + target["scenario"].astype(str)
+            )
             target["scenario_type"] = key.map(lookup).fillna("")
     except FileNotFoundError:
         print("⚠️ Metadata Excel not found. scenario_type left empty.")
@@ -777,7 +1011,8 @@ def step3_finalize_target_schema() -> None:
         return "carbontech"
 
     target["technology_type"] = [
-        classify_tech(sec, tech) for sec, tech in zip(target["sector"], target["technology"])
+        classify_tech(sec, tech)
+        for sec, tech in zip(target["sector"], target["technology"])
     ]
 
     # Price unit & indicator (fixed as USD/MWh as in original script)
@@ -813,57 +1048,98 @@ def step3_finalize_target_schema() -> None:
     # Build keys for joins
     join_key = ["scenario_provider", "scenario", "scenario_geography", "scenario_year"]
     # Prepare price tables with matching column names
-    elec = price_tables["elec"].rename(columns={
-        "model": "scenario_provider",
-        "scenario": "scenario",
-        "region": "scenario_geography",
-        "year": "scenario_year",
-        "price_usd_per_mwh": "scenario_price_electricity"
-    }) if not price_tables["elec"].empty else pd.DataFrame(columns=join_key + ["scenario_price_electricity"])
+    elec = (
+        price_tables["elec"].rename(
+            columns={
+                "model": "scenario_provider",
+                "scenario": "scenario",
+                "region": "scenario_geography",
+                "year": "scenario_year",
+                "price_usd_per_mwh": "scenario_price_electricity",
+            }
+        )
+        if not price_tables["elec"].empty
+        else pd.DataFrame(columns=join_key + ["scenario_price_electricity"])
+    )
 
-    primary = price_tables["primary"].rename(columns={
-        "model": "scenario_provider",
-        "scenario": "scenario",
-        "region": "scenario_geography",
-        "year": "scenario_year",
-        "price_usd_per_mwh": "scenario_price_primary"
-    }) if not price_tables["primary"].empty else pd.DataFrame(columns=join_key + ["scenario_price_primary"])
+    primary = (
+        price_tables["primary"].rename(
+            columns={
+                "model": "scenario_provider",
+                "scenario": "scenario",
+                "region": "scenario_geography",
+                "year": "scenario_year",
+                "price_usd_per_mwh": "scenario_price_primary",
+            }
+        )
+        if not price_tables["primary"].empty
+        else pd.DataFrame(columns=join_key + ["scenario_price_primary"])
+    )
 
-    sec_by_fuel = price_tables["secondary_by_fuel"].rename(columns={
-        "model": "scenario_provider",
-        "scenario": "scenario",
-        "region": "scenario_geography",
-        "year": "scenario_year",
-        "Fuel_norm": "fuel_for_price_norm",
-        "price_usd_per_mwh": "fuel_price"
-    }) if not price_tables["secondary_by_fuel"].empty else pd.DataFrame(columns=join_key + ["fuel_for_price", "fuel_price"])
+    sec_by_fuel = (
+        price_tables["secondary_by_fuel"].rename(
+            columns={
+                "model": "scenario_provider",
+                "scenario": "scenario",
+                "region": "scenario_geography",
+                "year": "scenario_year",
+                "Fuel_norm": "fuel_for_price_norm",
+                "price_usd_per_mwh": "fuel_price",
+            }
+        )
+        if not price_tables["secondary_by_fuel"].empty
+        else pd.DataFrame(columns=join_key + ["fuel_for_price", "fuel_price"])
+    )
 
     # scenario_price: Power/Renewables -> electricity; others -> primary
     target = target.merge(elec, on=join_key, how="left")
     target = target.merge(primary, on=join_key, how="left")
-    is_power_like = target["sector"].isin(["Power", "Renewables"]) if "sector" in target.columns else pd.Series(False, index=target.index)
+    is_power_like = (
+        target["sector"].isin(["Power", "Renewables"])
+        if "sector" in target.columns
+        else pd.Series(False, index=target.index)
+    )
     target["scenario_price"] = np.where(
         is_power_like,
         target["scenario_price_electricity"],
         target["scenario_price_primary"],
     )
-    target = target.drop(columns=["scenario_price_electricity", "scenario_price_primary"], errors="ignore")
+    target = target.drop(
+        columns=["scenario_price_electricity", "scenario_price_primary"],
+        errors="ignore",
+    )
 
     # fuel_price: technology → fuel mapping then merge with secondary-by-fuel prices
     target["fuel_for_price"] = target["technology"].map(fuel_map).fillna("Gas")
-    target["fuel_for_price_norm"] = target["fuel_for_price"].apply(_normalize_fuel_label)
-    target = target.merge(sec_by_fuel, on=join_key + ["fuel_for_price_norm"], how="left")
+    target["fuel_for_price_norm"] = target["fuel_for_price"].apply(
+        _normalize_fuel_label
+    )
+    target = target.merge(
+        sec_by_fuel, on=join_key + ["fuel_for_price_norm"], how="left"
+    )
     target = target.drop(columns=["fuel_for_price_norm"], errors="ignore")
 
     # Pathway logic (Power/Renewables vs Coal/Gas&Oil)
     # Determine pathway_unit and scenario_pathway from df columns (vectorized)
-    has_primary = df["primary_energy_mwh_per_yr"].notna() if "primary_energy_mwh_per_yr" in df.columns else pd.Series(False, index=df.index)
-    has_secondary = df["secondary_energy_mwh_per_yr"].notna() if "secondary_energy_mwh_per_yr" in df.columns else pd.Series(False, index=df.index)
-    has_capacity = df["capacity_mw"].notna() if "capacity_mw" in df.columns else pd.Series(False, index=df.index)
+    has_primary = (
+        df["primary_energy_mwh_per_yr"].notna()
+        if "primary_energy_mwh_per_yr" in df.columns
+        else pd.Series(False, index=df.index)
+    )
+    has_secondary = (
+        df["secondary_energy_mwh_per_yr"].notna()
+        if "secondary_energy_mwh_per_yr" in df.columns
+        else pd.Series(False, index=df.index)
+    )
+    has_capacity = (
+        df["capacity_mw"].notna()
+        if "capacity_mw" in df.columns
+        else pd.Series(False, index=df.index)
+    )
 
     # pathway_unit default MWh/yr, set to MW only where appropriate
     target["pathway_unit"] = "MWh/yr"
-    idx = (~has_primary & ~has_secondary & has_capacity)
+    idx = ~has_primary & ~has_secondary & has_capacity
     if len(target) == len(df):
         target.loc[idx, "pathway_unit"] = "MW"
 
@@ -871,13 +1147,21 @@ def step3_finalize_target_schema() -> None:
     sec_series = target["sector"].astype(str)
     scenario_pathway = pd.Series(np.nan, index=target.index, dtype=float)
     if "primary_energy_mwh_per_yr" in df.columns:
-        scenario_pathway = np.where(sec_series.isin(["Coal", "Gas&Oil"]), df["primary_energy_mwh_per_yr"], scenario_pathway)
+        scenario_pathway = np.where(
+            sec_series.isin(["Coal", "Gas&Oil"]),
+            df["primary_energy_mwh_per_yr"],
+            scenario_pathway,
+        )
     # For Power/Renewables
     if "secondary_energy_mwh_per_yr" in df.columns:
         use_secondary = sec_series.isin(["Power", "Renewables"]) & has_secondary
-        scenario_pathway = np.where(use_secondary, df["secondary_energy_mwh_per_yr"], scenario_pathway)
+        scenario_pathway = np.where(
+            use_secondary, df["secondary_energy_mwh_per_yr"], scenario_pathway
+        )
     if "capacity_mw" in df.columns:
-        use_capacity = sec_series.isin(["Power", "Renewables"]) & ~has_secondary & has_capacity
+        use_capacity = (
+            sec_series.isin(["Power", "Renewables"]) & ~has_secondary & has_capacity
+        )
         scenario_pathway = np.where(use_capacity, df["capacity_mw"], scenario_pathway)
     target["scenario_pathway"] = scenario_pathway
 
@@ -885,7 +1169,10 @@ def step3_finalize_target_schema() -> None:
     if "secondary_energy_mwh_per_yr" in df.columns and "capacity_mw" in df.columns:
         denom = df["capacity_mw"] * 8760.0
         cf = np.where(
-            sec_series.isin(["Power", "Renewables"]) & df["secondary_energy_mwh_per_yr"].notna() & df["capacity_mw"].notna() & (df["capacity_mw"] > 0),
+            sec_series.isin(["Power", "Renewables"])
+            & df["secondary_energy_mwh_per_yr"].notna()
+            & df["capacity_mw"].notna()
+            & (df["capacity_mw"] > 0),
             df["secondary_energy_mwh_per_yr"] / denom,
             np.nan,
         )
@@ -1011,7 +1298,9 @@ def step3_finalize_target_schema() -> None:
                     r10 = r["R10 Region"]
                     iso2_raw = r["ISO2"]
                     if pd.notna(iso2_raw) and str(iso2_raw).strip():
-                        parts = [p.strip() for p in str(iso2_raw).split("|") if p.strip()]
+                        parts = [
+                            p.strip() for p in str(iso2_raw).split("|") if p.strip()
+                        ]
                         r10_map[r10] = ",".join(sorted(parts))
         except FileNotFoundError:
             pass
@@ -1024,7 +1313,9 @@ def step3_finalize_target_schema() -> None:
         return full
 
     iso_map = build_iso_mapping()
-    target["country_iso2_list"] = target["scenario_geography"].map(iso_map).fillna(target["scenario_geography"])  # fallback
+    target["country_iso2_list"] = (
+        target["scenario_geography"].map(iso_map).fillna(target["scenario_geography"])
+    )  # fallback
 
     # Bring additional columns from Step 2
     for col in [
@@ -1075,138 +1366,162 @@ def step3_finalize_target_schema() -> None:
 # Step 4: Aggregation and Gap-Filling
 # ======================================
 
-def temporal_interpolation(df_in: pd.DataFrame, start_year: int = 2023, end_year: int = 2050) -> pd.DataFrame:
+
+def temporal_interpolation(
+    df_in: pd.DataFrame, start_year: int = 2023, end_year: int = 2050
+) -> pd.DataFrame:
     """
     Perform temporal interpolation to fill missing years in scenario data.
-    
+
     - Linear interpolation for missing years between available data points
     - Constant extrapolation for years before first available year (extend backwards to start_year)
     - Constant extrapolation for years after last available year (extend forwards to end_year)
-    
+
     Args:
         df_in: DataFrame with scenario_year column and value columns to interpolate
         start_year: First year to ensure coverage for (default 2023)
         end_year: Last year to ensure coverage for (default 2050)
-    
+
     Returns:
         DataFrame with complete yearly data from start_year to end_year
     """
     if "scenario_year" not in df_in.columns:
         print("⚠️ No scenario_year column found, skipping temporal interpolation")
         return df_in
-    
+
     # Identify numeric columns that should be interpolated
     # Include key data columns regardless of their current dtype
     target_numeric_cols = [
-        'scenario_pathway', 'scenario_price', 'fuel_price', 'scenario_capacity_factor',
-        'efficiency_decimal', 'lifetime_years', 'capacity_additions_mw_per_yr',
-        'om_cost_usd_per_mw_per_yr', 'capital_cost_usd_per_mw', 'carbon_price_usd_per_tco2'
+        "scenario_pathway",
+        "scenario_price",
+        "fuel_price",
+        "scenario_capacity_factor",
+        "efficiency_decimal",
+        "lifetime_years",
+        "capacity_additions_mw_per_yr",
+        "om_cost_usd_per_mw_per_yr",
+        "capital_cost_usd_per_mw",
+        "carbon_price_usd_per_tco2",
     ]
-    
+
     numeric_cols = []
     for col in target_numeric_cols:
         if col in df_in.columns:
             # Try to convert to numeric if not already
             try:
-                df_in[col] = pd.to_numeric(df_in[col], errors='coerce')
+                df_in[col] = pd.to_numeric(df_in[col], errors="coerce")
                 if df_in[col].notna().any():
                     numeric_cols.append(col)
             except:
                 continue
-    
+
     if not numeric_cols:
         print("⚠️ No numeric columns found for interpolation")
         return df_in
-    
+
     # Early exit if all years are already present
     available_years = sorted(df_in["scenario_year"].dropna().unique())
     expected_years = set(range(start_year, end_year + 1))
     missing_years = expected_years - set(available_years)
-    
+
     if not missing_years:
-        print(f"✅ All years {start_year}-{end_year} already present, skipping interpolation")
+        print(
+            f"✅ All years {start_year}-{end_year} already present, skipping interpolation"
+        )
         return df_in
-    
+
     print(f"Missing years detected: {sorted(missing_years)}")
-    
+
     # Group by essential identifier columns only to define time series groups
     # Don't include columns that are likely to have many NaN values or are metadata-like
     essential_id_cols = [
-        "scenario_provider", "scenario", "scenario_geography", 
-        "sector", "technology"
+        "scenario_provider",
+        "scenario",
+        "scenario_geography",
+        "sector",
+        "technology",
     ]
     grouping_cols = [col for col in essential_id_cols if col in df_in.columns]
-    
+
     print(f"  DEBUG: All columns in df_in: {list(df_in.columns)}")
     print(f"  DEBUG: Grouping columns filter result: {grouping_cols}")
-    
-    print(f"Temporal interpolation: processing {len(numeric_cols)} numeric columns across {len(grouping_cols)} grouping dimensions")
+
+    print(
+        f"Temporal interpolation: processing {len(numeric_cols)} numeric columns across {len(grouping_cols)} grouping dimensions"
+    )
     print(f"  DEBUG: Numeric columns: {numeric_cols}")
     print(f"  DEBUG: Grouping columns: {grouping_cols}")
     print(f"  DEBUG: Available years in data: {available_years}")
     print(f"  DEBUG: Expected years: {sorted(expected_years)}")
-    
+
     # Generate all required years
     all_years = list(range(start_year, end_year + 1))
-    
+
     interpolated_groups = []
     total_groups = 0
     processed_groups = 0
-    
+
     print(f"  DEBUG: Starting groupby with {len(df_in)} rows")
-    
+
     # Check for any NaN values in grouping columns
     for col in grouping_cols:
         nan_count = df_in[col].isna().sum()
         if nan_count > 0:
             print(f"  WARNING: {col} has {nan_count} NaN values")
-    
+
     # Use regular pandas for interpolation if we're using Modin (more reliable for complex groupby)
     df_for_groupby = df_in
-    if hasattr(df_in, '_query_compiler'):  # This indicates Modin DataFrame
+    if hasattr(df_in, "_query_compiler"):  # This indicates Modin DataFrame
         print("  DEBUG: Converting Modin to Pandas for interpolation groupby")
         import pandas as regular_pd
+
         df_for_groupby = df_in._to_pandas()  # Use Modin's built-in conversion method
-        print(f"  DEBUG: Converted to pandas. New columns: {list(df_for_groupby.columns)}")
-        
+        print(
+            f"  DEBUG: Converted to pandas. New columns: {list(df_for_groupby.columns)}"
+        )
+
         # Verify all grouping columns still exist
-        missing_cols = [col for col in grouping_cols if col not in df_for_groupby.columns]
+        missing_cols = [
+            col for col in grouping_cols if col not in df_for_groupby.columns
+        ]
         if missing_cols:
             print(f"  ERROR: Missing columns after conversion: {missing_cols}")
             return df_in
-    
+
     # Add debugging for the groupby operation
     try:
         grouped = df_for_groupby.groupby(grouping_cols, dropna=False)
         print(f"  DEBUG: Created groupby object with {grouped.ngroups} groups")
-        
+
         for group_key, group_df in grouped:
             total_groups += 1
-            
+
             if total_groups <= 3:  # Debug first few groups
                 print(f"  DEBUG: Processing group {total_groups}: {group_key}")
                 print(f"  DEBUG: Group has {len(group_df)} rows")
-            
+
             if group_df.empty:
                 print(f"  DEBUG: Skipping empty group {total_groups}")
                 continue
-                
+
             # Get available years and sort
             available_years = sorted(group_df["scenario_year"].dropna().unique())
             if not available_years:
                 print(f"  DEBUG: Skipping group {total_groups} - no valid years")
                 continue
-                
+
             # Check if this group needs interpolation
             group_missing = expected_years - set(available_years)
             if not group_missing:
                 # No missing years for this group, keep as-is
-                print(f"  DEBUG: Group {total_groups} complete, adding {len(group_df)} rows as-is")
+                print(
+                    f"  DEBUG: Group {total_groups} complete, adding {len(group_df)} rows as-is"
+                )
                 interpolated_groups.append(group_df)
                 continue
-                
+
             processed_groups += 1
-            
+
             # Create complete year range for this group
             group_meta = {}
             if isinstance(group_key, tuple):
@@ -1214,34 +1529,40 @@ def temporal_interpolation(df_in: pd.DataFrame, start_year: int = 2023, end_year
                     group_meta[col] = group_key[i]
             else:
                 group_meta[grouping_cols[0]] = group_key
-            
+
             # Create DataFrame with all years for this group
             all_years_df = pd.DataFrame({"scenario_year": all_years})
             for col, val in group_meta.items():
                 all_years_df[col] = val
-            
+
             # Merge with existing data - ensure both DataFrames are regular pandas
             merge_cols = ["scenario_year"] + list(group_meta.keys())
-            
+
             # Convert to regular pandas if needed
-            if hasattr(all_years_df, '_query_compiler'):
+            if hasattr(all_years_df, "_query_compiler"):
                 all_years_df = all_years_df._to_pandas()
-            if hasattr(group_df, '_query_compiler'):
+            if hasattr(group_df, "_query_compiler"):
                 group_df = group_df._to_pandas()
-                
+
             try:
                 merged = all_years_df.merge(group_df, on=merge_cols, how="left")
             except Exception as e:
                 print(f"  ERROR in merge for group {total_groups}: {e}")
                 # Skip this group and continue
                 continue
-            
+
             # Fill categorical/string columns with values from the group (should be same for all years)
             categorical_cols = [
-                'scenario_type', 'technology_type', 'price_unit', 'price_indicator',
-                'fuel_for_price', 'pathway_unit', 'country_iso2_list', 'stringency'
+                "scenario_type",
+                "technology_type",
+                "price_unit",
+                "price_indicator",
+                "fuel_for_price",
+                "pathway_unit",
+                "country_iso2_list",
+                "stringency",
             ]
-            
+
             for col in categorical_cols:
                 if col in merged.columns:
                     # Forward fill categorical values within this group
@@ -1250,85 +1571,89 @@ def temporal_interpolation(df_in: pd.DataFrame, start_year: int = 2023, end_year
                         # Use the first non-null value for all rows in this group
                         fill_value = non_null_values.iloc[0]
                         merged[col] = merged[col].fillna(fill_value)
-            
+
             # Interpolate each numeric column using vectorized operations
             for col in numeric_cols:
                 if col not in merged.columns:
                     merged[col] = np.nan
                     continue
-                    
+
                 # Get indices where we have valid data
                 valid_mask = merged[col].notna()
                 if not valid_mask.any():
                     continue
-                    
+
                 valid_years = merged.loc[valid_mask, "scenario_year"].values
                 valid_values = merged.loc[valid_mask, col].values
-                
+
                 if len(valid_values) == 1:
                     # Only one data point - constant extrapolation for all missing
                     merged[col] = merged[col].fillna(valid_values[0])
                 else:
                     # Use pandas interpolate for the middle, manual extrapolation for edges
                     merged[col] = merged[col].interpolate(method="linear")
-                    
+
                     # Handle extrapolation for years before first valid point
                     first_valid_year = min(valid_years)
                     first_valid_value = valid_values[np.argmin(valid_years)]
                     before_mask = merged["scenario_year"] < first_valid_year
                     merged.loc[before_mask, col] = first_valid_value
-                    
-                    # Handle extrapolation for years after last valid point  
+
+                    # Handle extrapolation for years after last valid point
                     last_valid_year = max(valid_years)
                     last_valid_value = valid_values[np.argmax(valid_years)]
                     after_mask = merged["scenario_year"] > last_valid_year
                     merged.loc[after_mask, col] = last_valid_value
-            
+
             interpolated_groups.append(merged)
-            
+
     except Exception as e:
         print(f"  ERROR: Groupby operation failed: {e}")
         return df_in
-    
+
     print(f"  DEBUG: Finished processing {total_groups} total groups")
-    
+
     if not interpolated_groups:
         print("⚠️ No groups processed during temporal interpolation")
-        print(f"  DEBUG: total_groups={total_groups}, processed_groups={processed_groups}")
+        print(
+            f"  DEBUG: total_groups={total_groups}, processed_groups={processed_groups}"
+        )
         return df_in
-    
+
     result = pd.concat(interpolated_groups, ignore_index=True)
-    
+
     # Summary statistics
     before_count = len(df_in)
     after_count = len(result)
     groups_with_interpolation = processed_groups
     groups_unchanged = total_groups - processed_groups
-    
+
     print(f"Temporal interpolation completed:")
     print(f"  - {groups_with_interpolation} groups needed interpolation")
     print(f"  - {groups_unchanged} groups were already complete")
     print(f"  - Result: {after_count:,} rows (from {before_count:,})")
     print(f"  - Added {after_count - before_count:,} interpolated rows")
-    
+
     return result
 
 
 def vectorized_mapping(df_in: pd.DataFrame, mapping_df: pd.DataFrame) -> pd.DataFrame:
     """Vectorized sector/technology mapping via merge instead of row-wise loops."""
     # Convert both to regular pandas to avoid Modin merge issues
-    if hasattr(df_in, '_query_compiler'):
+    if hasattr(df_in, "_query_compiler"):
         import pandas as regular_pd
+
         left = df_in._to_pandas().copy()
     else:
         left = df_in.copy()
-        
-    if hasattr(mapping_df, '_query_compiler'):
+
+    if hasattr(mapping_df, "_query_compiler"):
         import pandas as regular_pd
+
         right = mapping_df._to_pandas()
     else:
         right = mapping_df.copy()
-    
+
     right = right.rename(
         columns={
             "current_sector": "sector",
@@ -1336,7 +1661,15 @@ def vectorized_mapping(df_in: pd.DataFrame, mapping_df: pd.DataFrame) -> pd.Data
         }
     )
     left = left.merge(
-        right[["sector", "technology", "target_sector", "target_technology", "aggregation_group"]],
+        right[
+            [
+                "sector",
+                "technology",
+                "target_sector",
+                "target_technology",
+                "aggregation_group",
+            ]
+        ],
         on=["sector", "technology"],
         how="left",
     )
@@ -1354,22 +1687,23 @@ def gap_fill_with_hierarchy(
 ) -> pd.DataFrame:
     """
     Gap-fill columns using hierarchical grouping specifications.
-    
+
     Args:
         df_in: Input DataFrame
         spec: Dict mapping column name -> list of grouping levels (each level is a list of column names)
         agg_fn_per_col: Optional dict mapping column -> aggregation function ('median' or 'mean')
-    
+
     Returns:
         DataFrame with gap-filled values and tracking of which columns were filled
     """
     # Convert to regular pandas to avoid Modin compatibility issues
-    if hasattr(df_in, '_query_compiler'):  # This indicates Modin DataFrame
+    if hasattr(df_in, "_query_compiler"):  # This indicates Modin DataFrame
         import pandas as regular_pd
+
         df = df_in._to_pandas().copy()
     else:
         df = df_in.copy()
-    
+
     if "gap_filled_columns" not in df.columns:
         df["gap_filled_columns"] = ""
     else:
@@ -1377,72 +1711,86 @@ def gap_fill_with_hierarchy(
         df["gap_filled_columns"] = df["gap_filled_columns"].fillna("").astype(str)
 
     print(f"🔧 Gap-filling {len(spec)} columns using hierarchical approach...")
-    
+
     for col, levels in spec.items():
         if col not in df.columns:
             print(f"   ⚠️ Skipping {col} - column not found")
             continue
-            
+
         agg = (agg_fn_per_col or {}).get(col, "median")
         missing_mask = df[col].isna()
         initial_missing_count = missing_mask.sum()
-        
+
         if not missing_mask.any():
             print(f"   ✅ {col}: no missing values")
             continue
-            
-        print(f"   🔧 {col}: filling {initial_missing_count:,} missing values using {agg}...")
-        
+
+        print(
+            f"   🔧 {col}: filling {initial_missing_count:,} missing values using {agg}..."
+        )
+
         filled_series = df[col].copy()
-        rows_filled_this_column = pd.Series(False, index=df.index)  # Track what got filled for this column
+        rows_filled_this_column = pd.Series(
+            False, index=df.index
+        )  # Track what got filled for this column
         level_fill_counts = []
-        
+
         for level_idx, level in enumerate(levels):
             # Filter to only available columns
             keys = [k for k in level if k in df.columns]
             if not keys:
-                print(f"      Level {level_idx + 1}: {level} - no valid columns, skipping")
+                print(
+                    f"      Level {level_idx + 1}: {level} - no valid columns, skipping"
+                )
                 continue
-                
+
             # Check how many rows still need filling
             still_missing = filled_series.isna()
             if not still_missing.any():
                 break
-                
+
             # Calculate group statistics
             try:
                 grp = df.groupby(keys, dropna=False)[col]
                 stats = grp.transform(agg)
-                
+
                 # Identify rows that can be filled at this level
                 need = still_missing & stats.notna()
                 fill_count = need.sum()
-                
+
                 if fill_count > 0:
                     filled_series = filled_series.where(~need, stats)
-                    rows_filled_this_column |= need  # Track cumulative fills for this column
+                    rows_filled_this_column |= (
+                        need  # Track cumulative fills for this column
+                    )
                     level_fill_counts.append((level_idx + 1, keys, fill_count))
-                    print(f"      Level {level_idx + 1}: {keys} - filled {fill_count:,} values")
+                    print(
+                        f"      Level {level_idx + 1}: {keys} - filled {fill_count:,} values"
+                    )
                 else:
                     print(f"      Level {level_idx + 1}: {keys} - no additional fills")
-                    
+
             except Exception as e:
                 print(f"      Level {level_idx + 1}: {keys} - error: {e}")
                 continue
-        
+
         # Update the column
         df[col] = filled_series
         final_missing_count = df[col].isna().sum()
         total_filled = initial_missing_count - final_missing_count
-        
-        print(f"      Summary: {total_filled:,} values filled, {final_missing_count:,} still missing")
-        
+
+        print(
+            f"      Summary: {total_filled:,} values filled, {final_missing_count:,} still missing"
+        )
+
         # Update gap_filled_columns tracking for rows that were originally missing AND got filled
         actually_filled_mask = missing_mask & rows_filled_this_column
         filled_indices = df.index[actually_filled_mask]
-        
+
         if len(filled_indices) > 0:
-            print(f"      Tracking: updating gap_filled_columns for {len(filled_indices):,} rows")
+            print(
+                f"      Tracking: updating gap_filled_columns for {len(filled_indices):,} rows"
+            )
             for idx in filled_indices:
                 current_val = df.loc[idx, "gap_filled_columns"]
                 if pd.isna(current_val) or current_val == "":
@@ -1451,26 +1799,29 @@ def gap_fill_with_hierarchy(
                     df.loc[idx, "gap_filled_columns"] = str(current_val) + "," + col
         else:
             print(f"      Tracking: no rows to update for {col}")
-    
+
     # Summary statistics and debugging
     total_filled_rows = (df["gap_filled_columns"] != "").sum()
     non_empty_tracking = df[df["gap_filled_columns"] != ""]
-    
-    print(f"   📊 Gap-filling complete: {total_filled_rows:,} rows received gap-filled values")
-    
+
+    print(
+        f"   📊 Gap-filling complete: {total_filled_rows:,} rows received gap-filled values"
+    )
+
     if total_filled_rows > 0:
         # Show sample of tracking
         sample_tracking = non_empty_tracking["gap_filled_columns"].head(5).tolist()
         print(f"   📝 Sample gap_filled_columns values: {sample_tracking}")
-        
+
         # Show breakdown by column
         all_filled_cols = []
         for val in non_empty_tracking["gap_filled_columns"]:
             if pd.notna(val) and val != "":
                 all_filled_cols.extend(val.split(","))
-        
+
         if all_filled_cols:
             from collections import Counter
+
             col_counts = Counter(all_filled_cols)
             print(f"   📊 Columns filled breakdown:")
             for col_name, count in col_counts.most_common():
@@ -1480,9 +1831,13 @@ def gap_fill_with_hierarchy(
         # Debug: check if we have any non-empty strings
         debug_non_empty = (df["gap_filled_columns"].fillna("") != "").sum()
         debug_na_count = df["gap_filled_columns"].isna().sum()
-        print(f"     Debug: {debug_non_empty} non-empty strings, {debug_na_count} NA values")
-        print(f"     Debug: Sample values: {df['gap_filled_columns'].head(10).tolist()}")
-    
+        print(
+            f"     Debug: {debug_non_empty} non-empty strings, {debug_na_count} NA values"
+        )
+        print(
+            f"     Debug: Sample values: {df['gap_filled_columns'].head(10).tolist()}"
+        )
+
     return df
 
 
@@ -1502,56 +1857,72 @@ def step4_aggregate_and_gapfill() -> None:
     # This ensures complete coverage for scenarios missing intermediate years
     print_banner("STEP 4a — Temporal Interpolation")
     df = temporal_interpolation(df, start_year=2023, end_year=2050)
-    
-
 
     # Convert to regular pandas to avoid Modin aggregation issues
-    if hasattr(df, '_query_compiler'):
+    if hasattr(df, "_query_compiler"):
         import pandas as regular_pd
+
         df = df._to_pandas()
-    
+
     # Fix column types before processing to avoid mixed type issues
     print("Fixing column data types...")
-    
+
     # Numeric columns that should be float
     numeric_cols = [
-        'scenario_pathway', 'scenario_price', 'fuel_price', 'scenario_capacity_factor',
-        'efficiency_decimal', 'lifetime_years', 'capacity_additions_mw_per_yr',
-        'om_cost_usd_per_mw_per_yr', 'capital_cost_usd_per_mw', 'carbon_price_usd_per_tco2'
+        "scenario_pathway",
+        "scenario_price",
+        "fuel_price",
+        "scenario_capacity_factor",
+        "efficiency_decimal",
+        "lifetime_years",
+        "capacity_additions_mw_per_yr",
+        "om_cost_usd_per_mw_per_yr",
+        "capital_cost_usd_per_mw",
+        "carbon_price_usd_per_tco2",
     ]
-    
+
     for col in numeric_cols:
         if col in df.columns:
             try:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+                df[col] = pd.to_numeric(df[col], errors="coerce")
                 non_null = df[col].notna().sum()
                 print(f"   {col}: converted to numeric, {non_null:,} non-null values")
             except Exception as e:
                 print(f"   WARNING: Failed to convert {col} to numeric: {e}")
-    
+
     # String columns that should be consistent
     string_cols = [
-        'scenario_provider', 'scenario', 'scenario_type', 'scenario_geography', 
-        'sector', 'technology', 'technology_type', 'price_unit', 'fuel_for_price',
-        'pathway_unit', 'country_iso2_list'
+        "scenario_provider",
+        "scenario",
+        "scenario_type",
+        "scenario_geography",
+        "sector",
+        "technology",
+        "technology_type",
+        "price_unit",
+        "fuel_for_price",
+        "pathway_unit",
+        "country_iso2_list",
     ]
-    
+
     for col in string_cols:
         if col in df.columns:
             df[col] = df[col].astype(str)
-    
+
     # Year should be integer
-    if 'scenario_year' in df.columns:
-        df['scenario_year'] = pd.to_numeric(df['scenario_year'], errors='coerce').astype('Int64')
-    
+    if "scenario_year" in df.columns:
+        df["scenario_year"] = pd.to_numeric(
+            df["scenario_year"], errors="coerce"
+        ).astype("Int64")
+
     print(f"Data types fixed. Shape: {df.shape}")
-    
+
     # ===== TECHNOLOGY MAPPING DISABLED =====
     # Skip technology mapping to keep all technologies separate
     # This prevents artificial aggregation of different technology variants
     print("🚫 Technology mapping DISABLED - keeping all technologies separate")
     df_map = df.copy()  # Use original data without any technology mapping
-    
+
     # # Vectorized mapping from mapping file (first pass)
     # df_map = vectorized_mapping(df, mapping_df)
     # df_map["sector"] = df_map["target_sector"]
@@ -1659,10 +2030,8 @@ def step4_aggregate_and_gapfill() -> None:
     # df_map = canonicalize_to_final_targets(df_map)
     # after_rows = len(df_map)
     # print(f"Canonical targets: kept {after_rows:,}/{before_rows:,} rows")
-    
-    print(f"Keeping all original technologies: {len(df_map):,} rows")
-    
 
+    print(f"Keeping all original technologies: {len(df_map):,} rows")
 
     # Grouping keys
     grouping_cols = [
@@ -1680,7 +2049,11 @@ def step4_aggregate_and_gapfill() -> None:
     ]
 
     # Define aggregation spec: sums and weighted averages
-    sum_cols = [c for c in ["scenario_pathway", "capacity_additions_mw_per_yr"] if c in df_map.columns]
+    sum_cols = [
+        c
+        for c in ["scenario_pathway", "capacity_additions_mw_per_yr"]
+        if c in df_map.columns
+    ]
     avg_cols = [
         c
         for c in [
@@ -1713,9 +2086,22 @@ def step4_aggregate_and_gapfill() -> None:
             out[col] = group[col].sum()
         # Weighted averages by scenario_pathway
         for col in avg_cols:
-            out[col] = weighted_avg(group, col, "scenario_pathway" if "scenario_pathway" in group.columns else None) if "scenario_pathway" in group.columns else group[col].mean()
+            out[col] = (
+                weighted_avg(
+                    group,
+                    col,
+                    "scenario_pathway" if "scenario_pathway" in group.columns else None,
+                )
+                if "scenario_pathway" in group.columns
+                else group[col].mean()
+            )
         # Carry-forward non-agg columns (take first)
-        carry_cols = [c for c in group.columns if c not in set(sum_cols + avg_cols) and c not in ["target_sector", "target_technology", "aggregation_group"]]
+        carry_cols = [
+            c
+            for c in group.columns
+            if c not in set(sum_cols + avg_cols)
+            and c not in ["target_sector", "target_technology", "aggregation_group"]
+        ]
         carry_first = group[carry_cols].iloc[0]
         for c in carry_cols:
             out.setdefault(c, carry_first[c])
@@ -1724,24 +2110,26 @@ def step4_aggregate_and_gapfill() -> None:
     aggregated = df_map.groupby(grouping_cols, as_index=False).apply(aggregate_group)
     # groupby.apply with as_index=False returns index columns too; ensure flat frame
     if isinstance(aggregated.columns, pd.MultiIndex):
-        aggregated.columns = ["_".join([str(c) for c in tup if c != ""]) for tup in aggregated.columns]
-    
+        aggregated.columns = [
+            "_".join([str(c) for c in tup if c != ""]) for tup in aggregated.columns
+        ]
+
     # Initialize gap-filled tracking column
     if "gap_filled_columns" not in aggregated.columns:
         aggregated["gap_filled_columns"] = ""
     else:
         # Ensure it's properly initialized as string
-        aggregated["gap_filled_columns"] = aggregated["gap_filled_columns"].fillna("").astype(str)
-    
-
+        aggregated["gap_filled_columns"] = (
+            aggregated["gap_filled_columns"].fillna("").astype(str)
+        )
 
     # Create stringency BEFORE gap-filling so it can be used in hierarchy
     aggregated["stringency"] = aggregated.get("scenario_type", np.nan)
-    
+
     # Clean up zero values that should be treated as missing data
     print("🧹 Cleaning zero values that should be treated as missing...")
     zero_to_na_columns = ["lifetime_years", "efficiency_decimal"]
-    
+
     for col in zero_to_na_columns:
         if col in aggregated.columns:
             zero_count = (aggregated[col] == 0).sum()
@@ -1754,32 +2142,56 @@ def step4_aggregate_and_gapfill() -> None:
     # Define standard hierarchical gap-filling order for consistent logic
     # This follows a systematic approach from most specific to most general
     standard_hierarchy = [
-        ["scenario_year", "technology", "scenario_geography", "scenario_type", "stringency"],  # Most specific
-        ["scenario_year", "technology", "scenario_type", "stringency"],                        # Same policy
-        ["scenario_year", "technology", "scenario_geography", "scenario_type"],                # Same type, cross-stringency
-        ["scenario_year", "technology", "scenario_geography", "stringency"],                   # Same stringency, cross-type
-        ["scenario_year", "technology", "scenario_type"],                                      # Cross-geo/stringency
-        ["scenario_year", "technology", "stringency"],                                         # Cross-geo/type
-        ["scenario_year", "technology", "scenario_geography"],                                 # Cross-policy
-        ["scenario_year", "technology"],                                                       # Same tech only
-        ["technology", "scenario_geography", "scenario_type", "stringency"],                   # Cross-time
-        ["technology", "scenario_geography"],                                                  # Cross-time/policy
-        ["technology"]                                                                         # Most general
+        [
+            "scenario_year",
+            "technology",
+            "scenario_geography",
+            "scenario_type",
+            "stringency",
+        ],  # Most specific
+        ["scenario_year", "technology", "scenario_type", "stringency"],  # Same policy
+        [
+            "scenario_year",
+            "technology",
+            "scenario_geography",
+            "scenario_type",
+        ],  # Same type, cross-stringency
+        [
+            "scenario_year",
+            "technology",
+            "scenario_geography",
+            "stringency",
+        ],  # Same stringency, cross-type
+        ["scenario_year", "technology", "scenario_type"],  # Cross-geo/stringency
+        ["scenario_year", "technology", "stringency"],  # Cross-geo/type
+        ["scenario_year", "technology", "scenario_geography"],  # Cross-policy
+        ["scenario_year", "technology"],  # Same tech only
+        [
+            "technology",
+            "scenario_geography",
+            "scenario_type",
+            "stringency",
+        ],  # Cross-time
+        ["technology", "scenario_geography"],  # Cross-time/policy
+        ["technology"],  # Most general
     ]
-    
+
     # Apply standard hierarchy to all gap-fillable columns for consistency
     gap_spec: Dict[str, List[List[str]]] = {}
-    
+
     # Technology-specific columns use the full standard hierarchy
     tech_columns = [
-        "scenario_capacity_factor", "lifetime_years", "efficiency_decimal",
-        "om_cost_usd_per_mw_per_yr", "capital_cost_usd_per_mw"
+        "scenario_capacity_factor",
+        "lifetime_years",
+        "efficiency_decimal",
+        "om_cost_usd_per_mw_per_yr",
+        "capital_cost_usd_per_mw",
     ]
-    
+
     for col in tech_columns:
         if col in aggregated.columns:
             gap_spec[col] = standard_hierarchy
-    
+
     # Price columns use a simplified hierarchy focused on temporal and geographic consistency
     price_hierarchy = [
         ["scenario_year", "technology", "scenario_geography", "scenario_type"],
@@ -1787,22 +2199,28 @@ def step4_aggregate_and_gapfill() -> None:
         ["scenario_year", "technology", "scenario_type"],
         ["scenario_year", "technology"],
         ["technology", "scenario_geography"],
-        ["technology"]
+        ["technology"],
     ]
-    
+
     if "scenario_price" in aggregated.columns:
         gap_spec["scenario_price"] = price_hierarchy
-    
+
     # Fuel price uses fuel-specific hierarchy with cross-fuel fallbacks
     if "fuel_price" in aggregated.columns:
         gap_spec["fuel_price"] = [
-            ["scenario_year", "fuel_for_price", "scenario_geography", "scenario_type", "stringency"],
+            [
+                "scenario_year",
+                "fuel_for_price",
+                "scenario_geography",
+                "scenario_type",
+                "stringency",
+            ],
             ["scenario_year", "fuel_for_price", "scenario_geography", "scenario_type"],
             ["scenario_year", "fuel_for_price", "scenario_geography"],
             ["scenario_year", "fuel_for_price", "scenario_type"],
             ["scenario_year", "fuel_for_price"],
             ["fuel_for_price", "scenario_geography"],
-            ["fuel_for_price"]
+            ["fuel_for_price"],
         ]
 
     agg_fn = {"fuel_price": "mean"}  # use mean for fuel cascade; median elsewhere
@@ -1842,11 +2260,25 @@ def step4_aggregate_and_gapfill() -> None:
     print(f"✅ Wrote {out_file} | Shape: {aggregated[final_cols].shape}")
 
     # Complete-case filtering
-    critical = [c for c in ["scenario_pathway", "scenario_price", "om_cost_usd_per_mw_per_yr", "capital_cost_usd_per_mw"] if c in aggregated.columns]
-    complete_mask = aggregated[critical].notna().all(axis=1) if critical else pd.Series(True, index=aggregated.index)
+    critical = [
+        c
+        for c in [
+            "scenario_pathway",
+            "scenario_price",
+            "om_cost_usd_per_mw_per_yr",
+            "capital_cost_usd_per_mw",
+        ]
+        if c in aggregated.columns
+    ]
+    complete_mask = (
+        aggregated[critical].notna().all(axis=1)
+        if critical
+        else pd.Series(True, index=aggregated.index)
+    )
     if "efficiency_decimal" in aggregated.columns:
         eff_cond = ~(
-            aggregated["sector"].isin(["Power", "Renewables"]) & aggregated["efficiency_decimal"].isna()
+            aggregated["sector"].isin(["Power", "Renewables"])
+            & aggregated["efficiency_decimal"].isna()
         )
         complete_mask = complete_mask & eff_cond
 
@@ -1861,6 +2293,7 @@ def step4_aggregate_and_gapfill() -> None:
 # =====
 # main
 # =====
+
 
 def main() -> None:
     print_banner("AR6 Combined Pipeline — Start")
