@@ -28,10 +28,8 @@ import gc
 import sys
 from typing import Dict, List, Tuple, Optional
 
-try:
-    import modin.pandas as pd  # type: ignore
-except Exception:
-    import pandas as pd  # Fallback if Modin not available
+# Use regular pandas for better compatibility with complex operations
+import pandas as pd
 import numpy as np
 
 
@@ -96,13 +94,14 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
     try:
         source = pd.read_feather(input_file)
 
-        # Early filter for WITCH 5.0 to improve performance
-        print(f"   Before WITCH 5.0 filter: {source.shape[0]:,} rows")
-        source = source[source["Model"] == "WITCH 5.0"]
-        print(f"   After WITCH 5.0 filter: {source.shape[0]:,} rows")
+        # Filter for target models to improve performance
+        target_models = ["WITCH 5.0", "IMAGE 3.2"]
+        print(f"   Before model filter: {source.shape[0]:,} rows")
+        source = source[source["Model"].isin(target_models)]
+        print(f"   After model filter (WITCH 5.0, IMAGE 3.2): {source.shape[0]:,} rows")
 
         if source.empty:
-            print("❌ No data found for WITCH 5.0 model")
+            print("❌ No data found for target models (WITCH 5.0, IMAGE 3.2)")
             return None
     except FileNotFoundError:
         print(f"❌ Missing required input: {input_file}")
@@ -1329,6 +1328,10 @@ def step3_finalize_target_schema() -> None:
         if col in df.columns:
             target[col] = df[col]
 
+    # Create global geography aggregations before saving
+    print_banner("STEP 3a — Creating Global Geography Aggregations")
+    target_with_global = create_global_geography(target)
+
     # Save and cleanup
     out = "3_final_AR6_target_schema.csv"
     cols = [
@@ -1356,10 +1359,125 @@ def step3_finalize_target_schema() -> None:
         "capital_cost_usd_per_mw",
         "carbon_price_usd_per_tco2",
     ]
-    cols = [c for c in cols if c in target.columns]
-    target[cols].to_csv(out, index=False)
-    print(f"✅ Wrote {out} | Shape: {target[cols].shape}")
-    memory_release(df, target)
+    cols = [c for c in cols if c in target_with_global.columns]
+    target_with_global[cols].to_csv(out, index=False)
+    print(f"✅ Wrote {out} | Shape: {target_with_global[cols].shape}")
+    memory_release(df, target, target_with_global)
+
+
+# ======================================
+# Global Aggregation Helper
+# ======================================
+
+
+def create_global_geography(df_in: pd.DataFrame) -> pd.DataFrame:
+    """
+    Create 'Global' scenario_geography entries by aggregating across all geographies 
+    for each scenario. Uses sums for capacity-like metrics and weighted/simple averages for prices.
+    
+    Args:
+        df_in: DataFrame with scenario data across different geographies
+        
+    Returns:
+        DataFrame with additional rows for 'Global' scenario_geography
+    """
+    print("🌍 Creating Global scenario_geography aggregations...")
+    
+    df = df_in.copy()
+    
+    # Define grouping columns (exclude geography for global aggregation)
+    grouping_cols = [
+        "scenario_provider", 
+        "scenario", 
+        "scenario_type",
+        "sector", 
+        "technology", 
+        "scenario_year"
+    ]
+    grouping_cols = [c for c in grouping_cols if c in df.columns]
+    
+    # Define aggregation strategies
+    sum_cols = [
+        "scenario_pathway",  # Sum capacities/energy
+        "capacity_additions_mw_per_yr"
+    ]
+    sum_cols = [c for c in sum_cols if c in df.columns]
+    
+    # Weighted average by scenario_pathway for these columns
+    weighted_avg_cols = [
+        "scenario_capacity_factor",
+        "efficiency_decimal", 
+        "lifetime_years",
+        "om_cost_usd_per_mw_per_yr",
+        "capital_cost_usd_per_mw"
+    ]
+    weighted_avg_cols = [c for c in weighted_avg_cols if c in df.columns]
+    
+    # Simple average for price columns (not capacity-weighted)
+    simple_avg_cols = [
+        "scenario_price",
+        "fuel_price", 
+        "carbon_price_usd_per_tco2"
+    ]
+    simple_avg_cols = [c for c in simple_avg_cols if c in df.columns]
+    
+    def aggregate_to_global(group: pd.DataFrame) -> pd.Series:
+        """Aggregate a group of geographies to global values"""
+        result = {}
+        
+        # Sum the additive quantities
+        for col in sum_cols:
+            result[col] = group[col].sum()
+        
+        # Weighted averages (weighted by scenario_pathway if available)
+        weight_col = "scenario_pathway" if "scenario_pathway" in group.columns else None
+        for col in weighted_avg_cols:
+            if weight_col and not group[weight_col].isna().all():
+                weights = group[weight_col].fillna(0)
+                values = group[col]
+                # Only include non-NaN values in weighted average
+                valid_mask = values.notna() & (weights > 0)
+                if valid_mask.any():
+                    result[col] = (values[valid_mask] * weights[valid_mask]).sum() / weights[valid_mask].sum()
+                else:
+                    result[col] = values.mean()  # Fallback to simple mean
+            else:
+                result[col] = group[col].mean()
+        
+        # Simple averages for prices
+        for col in simple_avg_cols:
+            result[col] = group[col].mean()
+        
+        # Copy metadata from first row (should be same across geographies for a scenario)
+        metadata_cols = [c for c in group.columns 
+                        if c not in sum_cols + weighted_avg_cols + simple_avg_cols + grouping_cols
+                        and c != "scenario_geography"]
+        first_row = group.iloc[0]
+        for col in metadata_cols:
+            result[col] = first_row[col]
+            
+        # Set geography to "Global"
+        result["scenario_geography"] = "Global"
+        
+        return pd.Series(result)
+    
+    # Group by scenario dimensions (excluding geography) and aggregate
+    print(f"   Grouping by: {grouping_cols}")
+    print(f"   Processing {len(df)} rows across {df['scenario_geography'].nunique()} geographies")
+    
+    global_aggregated = df.groupby(grouping_cols, as_index=False).apply(aggregate_to_global, include_groups=False)
+    
+    # Reset index if needed (groupby.apply can create multi-index)
+    if isinstance(global_aggregated.index, pd.MultiIndex):
+        global_aggregated = global_aggregated.reset_index(drop=True)
+    
+    print(f"   Created {len(global_aggregated)} global aggregation rows")
+    
+    # Combine original data with global aggregations
+    combined = pd.concat([df, global_aggregated], ignore_index=True)
+    print(f"   Total rows after adding Global geography: {len(combined)}")
+    
+    return combined
 
 
 # ======================================
@@ -1469,24 +1587,7 @@ def temporal_interpolation(
         if nan_count > 0:
             print(f"  WARNING: {col} has {nan_count} NaN values")
 
-    # Use regular pandas for interpolation if we're using Modin (more reliable for complex groupby)
     df_for_groupby = df_in
-    if hasattr(df_in, "_query_compiler"):  # This indicates Modin DataFrame
-        print("  DEBUG: Converting Modin to Pandas for interpolation groupby")
-        import pandas as regular_pd
-
-        df_for_groupby = df_in._to_pandas()  # Use Modin's built-in conversion method
-        print(
-            f"  DEBUG: Converted to pandas. New columns: {list(df_for_groupby.columns)}"
-        )
-
-        # Verify all grouping columns still exist
-        missing_cols = [
-            col for col in grouping_cols if col not in df_for_groupby.columns
-        ]
-        if missing_cols:
-            print(f"  ERROR: Missing columns after conversion: {missing_cols}")
-            return df_in
 
     # Add debugging for the groupby operation
     try:
@@ -1538,11 +1639,7 @@ def temporal_interpolation(
             # Merge with existing data - ensure both DataFrames are regular pandas
             merge_cols = ["scenario_year"] + list(group_meta.keys())
 
-            # Convert to regular pandas if needed
-            if hasattr(all_years_df, "_query_compiler"):
-                all_years_df = all_years_df._to_pandas()
-            if hasattr(group_df, "_query_compiler"):
-                group_df = group_df._to_pandas()
+            # Continue with regular pandas DataFrames
 
             try:
                 merged = all_years_df.merge(group_df, on=merge_cols, how="left")
@@ -1639,20 +1736,8 @@ def temporal_interpolation(
 
 def vectorized_mapping(df_in: pd.DataFrame, mapping_df: pd.DataFrame) -> pd.DataFrame:
     """Vectorized sector/technology mapping via merge instead of row-wise loops."""
-    # Convert both to regular pandas to avoid Modin merge issues
-    if hasattr(df_in, "_query_compiler"):
-        import pandas as regular_pd
-
-        left = df_in._to_pandas().copy()
-    else:
-        left = df_in.copy()
-
-    if hasattr(mapping_df, "_query_compiler"):
-        import pandas as regular_pd
-
-        right = mapping_df._to_pandas()
-    else:
-        right = mapping_df.copy()
+    left = df_in.copy()
+    right = mapping_df.copy()
 
     right = right.rename(
         columns={
@@ -1680,29 +1765,25 @@ def vectorized_mapping(df_in: pd.DataFrame, mapping_df: pd.DataFrame) -> pd.Data
     return left
 
 
-def gap_fill_with_hierarchy(
+def gap_fill_with_global_fallback(
     df_in: pd.DataFrame,
     spec: Dict[str, List[List[str]]],
+    global_fallback_hierarchy: List[List[str]],
     agg_fn_per_col: Optional[Dict[str, str]] = None,
 ) -> pd.DataFrame:
     """
-    Gap-fill columns using hierarchical grouping specifications.
+    Gap-fill columns using hierarchical grouping specifications with Global geography fallbacks.
 
     Args:
         df_in: Input DataFrame
         spec: Dict mapping column name -> list of grouping levels (each level is a list of column names)
+        global_fallback_hierarchy: Additional hierarchy levels that specifically use Global geography
         agg_fn_per_col: Optional dict mapping column -> aggregation function ('median' or 'mean')
 
     Returns:
         DataFrame with gap-filled values and tracking of which columns were filled
     """
-    # Convert to regular pandas to avoid Modin compatibility issues
-    if hasattr(df_in, "_query_compiler"):  # This indicates Modin DataFrame
-        import pandas as regular_pd
-
-        df = df_in._to_pandas().copy()
-    else:
-        df = df_in.copy()
+    df = df_in.copy()
 
     if "gap_filled_columns" not in df.columns:
         df["gap_filled_columns"] = ""
@@ -1735,6 +1816,7 @@ def gap_fill_with_hierarchy(
         )  # Track what got filled for this column
         level_fill_counts = []
 
+        # Process standard hierarchy levels first
         for level_idx, level in enumerate(levels):
             # Filter to only available columns
             keys = [k for k in level if k in df.columns]
@@ -1773,6 +1855,62 @@ def gap_fill_with_hierarchy(
             except Exception as e:
                 print(f"      Level {level_idx + 1}: {keys} - error: {e}")
                 continue
+
+        # Process Global geography fallback levels if data still missing
+        still_missing = filled_series.isna()
+        if still_missing.any() and "scenario_geography" in df.columns:
+            print(f"      Applying Global geography fallbacks for remaining {still_missing.sum():,} missing values...")
+            
+            for global_level_idx, global_level in enumerate(global_fallback_hierarchy):
+                keys = [k for k in global_level if k in df.columns]
+                if not keys:
+                    continue
+                
+                still_missing = filled_series.isna()
+                if not still_missing.any():
+                    break
+                
+                # Create a subset with only Global geography data for the fallback calculation
+                global_data = df[df["scenario_geography"] == "Global"]
+                if global_data.empty:
+                    continue
+                
+                try:
+                    # Calculate statistics from Global data only
+                    if len(keys) == 1 and keys[0] in global_data.columns:
+                        # Simple case: group by single key
+                        global_stats = global_data.groupby(keys[0], dropna=False)[col].transform(agg)
+                        # Create a mapping from the key to the statistic
+                        key_to_stat = global_data.groupby(keys[0], dropna=False)[col].agg(agg).to_dict()
+                        # Map this back to the full dataframe
+                        full_stats = df[keys[0]].map(key_to_stat)
+                    else:
+                        # Multi-key case: create composite key
+                        global_data['_temp_key'] = global_data[keys].apply(lambda x: '|||'.join(x.astype(str)), axis=1)
+                        df['_temp_key'] = df[keys].apply(lambda x: '|||'.join(x.astype(str)), axis=1)
+                        
+                        key_to_stat = global_data.groupby('_temp_key', dropna=False)[col].agg(agg).to_dict()
+                        full_stats = df['_temp_key'].map(key_to_stat)
+                        
+                        # Clean up temporary columns
+                        global_data = global_data.drop(columns=['_temp_key'])
+                        df = df.drop(columns=['_temp_key'])
+                    
+                    # Apply Global fallback only to non-Global rows that are missing data
+                    need = still_missing & full_stats.notna() & (df["scenario_geography"] != "Global")
+                    fill_count = need.sum()
+                    
+                    if fill_count > 0:
+                        filled_series = filled_series.where(~need, full_stats)
+                        rows_filled_this_column |= need
+                        level_fill_counts.append((len(levels) + global_level_idx + 1, f"Global-{keys}", fill_count))
+                        print(f"      Global Level {global_level_idx + 1}: {keys} - filled {fill_count:,} values from Global data")
+                    else:
+                        print(f"      Global Level {global_level_idx + 1}: {keys} - no additional fills from Global data")
+                        
+                except Exception as e:
+                    print(f"      Global Level {global_level_idx + 1}: {keys} - error: {e}")
+                    continue
 
         # Update the column
         df[col] = filled_series
@@ -1858,11 +1996,7 @@ def step4_aggregate_and_gapfill() -> None:
     print_banner("STEP 4a — Temporal Interpolation")
     df = temporal_interpolation(df, start_year=2023, end_year=2050)
 
-    # Convert to regular pandas to avoid Modin aggregation issues
-    if hasattr(df, "_query_compiler"):
-        import pandas as regular_pd
-
-        df = df._to_pandas()
+    # Use regular pandas (already converted at top of pipeline)
 
     # Fix column types before processing to avoid mixed type issues
     print("Fixing column data types...")
@@ -2141,6 +2275,7 @@ def step4_aggregate_and_gapfill() -> None:
 
     # Define standard hierarchical gap-filling order for consistent logic
     # This follows a systematic approach from most specific to most general
+    # Now includes Global geography fallbacks
     standard_hierarchy = [
         [
             "scenario_year",
@@ -2174,6 +2309,18 @@ def step4_aggregate_and_gapfill() -> None:
         ],  # Cross-time
         ["technology", "scenario_geography"],  # Cross-time/policy
         ["technology"],  # Most general
+    ]
+
+    # Add Global geography-specific fallback levels for better gap-filling
+    # These levels specifically use Global geography as a fallback when regional data is missing
+    global_fallback_hierarchy = [
+        ["scenario_year", "technology", "scenario_type", "stringency"],  # Use Global for same policy
+        ["scenario_year", "technology", "scenario_type"],  # Use Global for same type
+        ["scenario_year", "technology", "stringency"],  # Use Global for same stringency
+        ["scenario_year", "technology"],  # Use Global for same tech/year
+        ["technology", "scenario_type", "stringency"],  # Use Global cross-time
+        ["technology", "scenario_type"],  # Use Global cross-time/stringency
+        ["technology"],  # Use Global most general
     ]
 
     # Apply standard hierarchy to all gap-fillable columns for consistency
@@ -2224,7 +2371,7 @@ def step4_aggregate_and_gapfill() -> None:
         ]
 
     agg_fn = {"fuel_price": "mean"}  # use mean for fuel cascade; median elsewhere
-    aggregated = gap_fill_with_hierarchy(aggregated, gap_spec, agg_fn)
+    aggregated = gap_fill_with_global_fallback(aggregated, gap_spec, global_fallback_hierarchy, agg_fn)
 
     # Scenario type update based on stringency values
     if "scenario_type" in aggregated.columns:
