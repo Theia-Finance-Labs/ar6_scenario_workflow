@@ -658,8 +658,26 @@ def step2_filter_and_pivot() -> None:
     # Renewables efficiency special-case: set to 100% if missing
     if "efficiency_percent" not in pivoted.columns:
         pivoted["efficiency_percent"] = np.nan
-    renewables_mask = pivoted["Sector"] == "Renewables"
-    pivoted.loc[renewables_mask, "efficiency_percent"] = 1.0
+    
+    # Define renewable technologies (now in Power sector, not Renewables sector)
+    renewable_tech_keywords = [
+        'Solar', 'Wind', 'Hydro', 'Geothermal', 'Nuclear', 
+        'Non-Biomass Renewables', 'Electricity - Non-Biomass Renewables'
+    ]
+    
+    # Create mask for renewable technologies based on technology name
+    tech_col = "Technology" if "Technology" in pivoted.columns else "technology"
+    renewable_mask = pivoted[tech_col].astype(str).apply(
+        lambda x: any(keyword in x for keyword in renewable_tech_keywords)
+    )
+    
+    # Also include old-style renewables sector if it exists
+    if "Sector" in pivoted.columns:
+        old_renewables_mask = pivoted["Sector"] == "Renewables"
+        renewable_mask = renewable_mask | old_renewables_mask
+    
+    print(f"Setting efficiency to 1.0 for {renewable_mask.sum()} renewable technology entries")
+    pivoted.loc[renewable_mask, "efficiency_percent"] = 1.0
 
     # Carbon price (if available in original df)
     if set(["carbon_price", "carbon_price_unit"]).issubset(df.columns):
@@ -1117,6 +1135,20 @@ def step3_finalize_target_schema() -> None:
         sec_by_fuel, on=join_key + ["fuel_for_price_norm"], how="left"
     )
     target = target.drop(columns=["fuel_for_price_norm"], errors="ignore")
+    
+    # Set fuel_price to 0 for renewable technologies (they don't consume fuel)
+    renewable_tech_keywords = [
+        'Solar', 'Wind', 'Hydro', 'Geothermal', 'Nuclear', 
+        'Non-Biomass Renewables', 'Electricity - Non-Biomass Renewables'
+    ]
+    
+    is_renewable_tech = target["technology"].astype(str).apply(
+        lambda x: any(keyword in x for keyword in renewable_tech_keywords)
+    )
+    
+    # Set fuel price to 0 for renewables (free fuel)
+    target.loc[is_renewable_tech, "fuel_price"] = 0.0
+    print(f"Set fuel_price=0 for {is_renewable_tech.sum()} renewable technology entries")
 
     # Pathway logic (Power/Renewables vs Coal/Gas&Oil)
     # Determine pathway_unit and scenario_pathway from df columns (vectorized)
@@ -1451,13 +1483,14 @@ def create_global_geography(df_in: pd.DataFrame) -> pd.DataFrame:
         # Copy metadata from first row (should be same across geographies for a scenario)
         metadata_cols = [c for c in group.columns 
                         if c not in sum_cols + weighted_avg_cols + simple_avg_cols + grouping_cols
-                        and c != "scenario_geography"]
+                        and c not in ["scenario_geography", "country_iso2_list"]]
         first_row = group.iloc[0]
         for col in metadata_cols:
             result[col] = first_row[col]
             
-        # Set geography to "Global"
+        # Set geography to "Global" and empty country list
         result["scenario_geography"] = "Global"
+        result["country_iso2_list"] = ""  # Global should have empty country list
         
         return pd.Series(result)
     
@@ -1738,7 +1771,7 @@ def vectorized_mapping(df_in: pd.DataFrame, mapping_df: pd.DataFrame) -> pd.Data
     """Vectorized sector/technology mapping via merge instead of row-wise loops."""
     left = df_in.copy()
     right = mapping_df.copy()
-
+    
     right = right.rename(
         columns={
             "current_sector": "sector",
@@ -1749,7 +1782,7 @@ def vectorized_mapping(df_in: pd.DataFrame, mapping_df: pd.DataFrame) -> pd.Data
         right[
             [
                 "sector",
-                "technology",
+                "technology", 
                 "target_sector",
                 "target_technology",
                 "aggregation_group",
@@ -1765,14 +1798,220 @@ def vectorized_mapping(df_in: pd.DataFrame, mapping_df: pd.DataFrame) -> pd.Data
     return left
 
 
-def gap_fill_with_global_fallback(
+
+def build_iso2_geographic_similarity_matrix(df: pd.DataFrame) -> Dict[str, Dict[str, float]]:
+    """
+    Build a similarity matrix between geographies based on ISO2 country overlap.
+    Returns nested dict: {geo1: {geo2: overlap_score, ...}, ...}
+    """
+    print("🗺️  Building ISO2-based geographic similarity matrix...")
+    
+    # Get unique geographies and their ISO2 lists
+    geo_iso2_map = {}
+    for geo in df['scenario_geography'].unique():
+        iso2_str = df[df['scenario_geography'] == geo]['country_iso2_list'].iloc[0]
+        if pd.notna(iso2_str) and iso2_str.strip():
+            # Parse comma-separated ISO2 codes
+            iso2_set = set(code.strip() for code in str(iso2_str).split(',') if code.strip())
+            geo_iso2_map[geo] = iso2_set
+        else:
+            geo_iso2_map[geo] = set()  # Empty for Global or missing
+    
+    # Calculate overlap scores between all geography pairs
+    similarity_matrix = {}
+    for geo1 in geo_iso2_map:
+        similarity_matrix[geo1] = {}
+        for geo2 in geo_iso2_map:
+            if geo1 == geo2:
+                similarity_matrix[geo1][geo2] = 1.0  # Perfect match
+            elif not geo_iso2_map[geo1] or not geo_iso2_map[geo2]:
+                similarity_matrix[geo1][geo2] = 0.0  # No overlap if either is empty
+            else:
+                # Jaccard similarity: intersection / union
+                intersection = len(geo_iso2_map[geo1] & geo_iso2_map[geo2])
+                union = len(geo_iso2_map[geo1] | geo_iso2_map[geo2])
+                similarity_matrix[geo1][geo2] = intersection / union if union > 0 else 0.0
+    
+    # Print some examples
+    print(f"   Built similarity matrix for {len(geo_iso2_map)} geographies")
+    print("   Example overlaps:")
+    for geo1 in list(geo_iso2_map.keys())[:3]:
+        for geo2 in list(geo_iso2_map.keys())[:3]:
+            if geo1 != geo2:
+                score = similarity_matrix[geo1][geo2]
+                if score > 0:
+                    print(f"     {geo1} ↔ {geo2}: {score:.2f}")
+    
+    return similarity_matrix
+
+
+def create_technology_lookup_table(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Create a comprehensive lookup table with best available values for each
+    technology/year/iso2/stringency combination using hierarchical gap-filling.
+    
+    Returns DataFrame with columns:
+    technology, year, iso2, stringency, capital_cost, om_cost, efficiency, lifetime, capacity_factor
+    """
+    print("📋 Creating technology lookup table...")
+    
+    # Extract all unique combinations
+    unique_techs = df['technology'].unique()
+    unique_years = sorted(df['scenario_year'].unique())
+    unique_stringencies = sorted(df['stringency'].unique()) if 'stringency' in df.columns else ['']
+    
+    # Get all ISO2 codes from country_iso2_list
+    all_iso2s = set()
+    for iso2_list in df['country_iso2_list'].dropna():
+        if str(iso2_list).strip():
+            iso2s = [code.strip() for code in str(iso2_list).split(',') if code.strip()]
+            all_iso2s.update(iso2s)
+    all_iso2s = sorted(all_iso2s)
+    
+    print(f"   Building lookup for {len(unique_techs)} techs × {len(unique_years)} years × {len(all_iso2s)} ISO2s × {len(unique_stringencies)} stringencies")
+    
+    # Columns to populate
+    value_cols = ['capital_cost_usd_per_mw', 'om_cost_usd_per_mw_per_yr', 'efficiency_decimal', 'lifetime_years', 'scenario_capacity_factor']
+    available_value_cols = [col for col in value_cols if col in df.columns]
+    
+    # Create all combinations
+    lookup_rows = []
+    
+    for tech in unique_techs:
+        for year in unique_years:
+            for iso2 in all_iso2s:
+                for stringency in unique_stringencies:
+                    # Create base row
+                    row = {
+                        'technology': tech,
+                        'year': year,
+                        'iso2': iso2,
+                        'stringency': stringency
+                    }
+                    
+                    # Fill each value column using hierarchical approach
+                    for col in available_value_cols:
+                        row[col.replace('_usd_per_mw_per_yr', '').replace('_usd_per_mw', '').replace('_decimal', '').replace('_years', '').replace('scenario_', '')] = None
+                    
+                    lookup_rows.append(row)
+    
+    lookup_df = pd.DataFrame(lookup_rows)
+    
+    # Hierarchical gap-filling for lookup table
+    print(f"   Applying hierarchical gap-filling to lookup table...")
+    
+    for col in available_value_cols:
+        col_short = col.replace('_usd_per_mw_per_yr', '').replace('_usd_per_mw', '').replace('_decimal', '').replace('_years', '').replace('scenario_', '')
+        print(f"     Processing {col_short}...")
+        
+        filled_count = 0
+        
+        # Hierarchy levels for lookup table
+        hierarchy = [
+            # Most specific: exact matches
+            {'tech': True, 'year': True, 'iso2': True, 'stringency': True},
+            {'tech': True, 'year': True, 'iso2': True, 'stringency': False},  # Cross stringency
+            {'tech': True, 'year': True, 'iso2': False, 'stringency': True},  # Geographic similarity
+            {'tech': True, 'year': True, 'iso2': False, 'stringency': False}, # Cross geo+stringency
+            {'tech': True, 'year': False, 'iso2': True, 'stringency': True},  # Cross year
+            {'tech': True, 'year': False, 'iso2': True, 'stringency': False}, # Cross year+stringency
+            {'tech': True, 'year': False, 'iso2': False, 'stringency': True}, # Cross year+geo
+            {'tech': True, 'year': False, 'iso2': False, 'stringency': False}, # Tech only
+        ]
+        
+        for level_idx, level in enumerate(hierarchy):
+            missing_mask = lookup_df[col_short].isna()
+            if not missing_mask.any():
+                break
+                
+            level_fills = 0
+            
+            for idx in lookup_df.index[missing_mask]:
+                target_tech = lookup_df.loc[idx, 'technology']
+                target_year = lookup_df.loc[idx, 'year']
+                target_iso2 = lookup_df.loc[idx, 'iso2']
+                target_stringency = lookup_df.loc[idx, 'stringency']
+                
+                # Build query for this level
+                query_mask = (df['technology'] == target_tech) if level['tech'] else pd.Series(True, index=df.index)
+                
+                if level['year']:
+                    query_mask &= (df['scenario_year'] == target_year)
+                    
+                if level['stringency'] and 'stringency' in df.columns:
+                    query_mask &= (df['stringency'] == target_stringency)
+                
+                if level['iso2']:
+                    # Exact ISO2 match
+                    iso2_mask = df['country_iso2_list'].apply(
+                        lambda x: target_iso2 in str(x).split(',') if pd.notna(x) else False
+                    )
+                    query_mask &= iso2_mask
+                else:
+                    # Geographic similarity - find geographies containing this ISO2
+                    iso2_mask = df['country_iso2_list'].apply(
+                        lambda x: target_iso2 in str(x).split(',') if pd.notna(x) else False
+                    )
+                    if iso2_mask.any():
+                        query_mask &= iso2_mask
+                
+                # Get candidates and calculate median
+                candidates = df.loc[query_mask & df[col].notna(), col]
+                if not candidates.empty:
+                    lookup_df.loc[idx, col_short] = candidates.median()
+                    level_fills += 1
+            
+            if level_fills > 0:
+                filled_count += level_fills
+                print(f"       Level {level_idx + 1}: filled {level_fills:,} values")
+        
+        print(f"     Total {col_short}: {filled_count:,} values filled")
+    
+    # Create stringency=NA fallback rows (median across all stringencies)
+    print(f"   Creating stringency=NA fallback rows...")
+    
+    fallback_rows = []
+    for tech in unique_techs:
+        for year in unique_years:
+            for iso2 in all_iso2s:
+                # Get median across all stringencies for this tech/year/iso2
+                base_mask = (lookup_df['technology'] == tech) & (lookup_df['year'] == year) & (lookup_df['iso2'] == iso2)
+                
+                row = {
+                    'technology': tech,
+                    'year': year,
+                    'iso2': iso2,
+                    'stringency': None  # NA stringency
+                }
+                
+                for col in available_value_cols:
+                    col_short = col.replace('_usd_per_mw_per_yr', '').replace('_usd_per_mw', '').replace('_decimal', '').replace('_years', '').replace('scenario_', '')
+                    values = lookup_df.loc[base_mask, col_short].dropna()
+                    row[col_short] = values.median() if not values.empty else None
+                
+                fallback_rows.append(row)
+    
+    fallback_df = pd.DataFrame(fallback_rows)
+    lookup_complete = pd.concat([lookup_df, fallback_df], ignore_index=True)
+    
+    print(f"   Lookup table created: {len(lookup_complete):,} rows ({len(lookup_df):,} specific + {len(fallback_df):,} fallback)")
+    
+    # Save lookup table as CSV for analysis
+    lookup_output_file = "4_technology_lookup_table.csv"
+    lookup_complete.to_csv(lookup_output_file, index=False)
+    print(f"   💾 Saved lookup table: {lookup_output_file}")
+    
+    return lookup_complete
+
+
+def gap_fill_with_lookup_table(
     df_in: pd.DataFrame,
     spec: Dict[str, List[List[str]]],
     global_fallback_hierarchy: List[List[str]],
     agg_fn_per_col: Optional[Dict[str, str]] = None,
 ) -> pd.DataFrame:
     """
-    Gap-fill columns using hierarchical grouping specifications with Global geography fallbacks.
+    Gap-fill columns using pre-computed technology lookup table.
 
     Args:
         df_in: Input DataFrame
@@ -1784,6 +2023,9 @@ def gap_fill_with_global_fallback(
         DataFrame with gap-filled values and tracking of which columns were filled
     """
     df = df_in.copy()
+    
+    # Create comprehensive technology lookup table
+    lookup_table = create_technology_lookup_table(df)
 
     if "gap_filled_columns" not in df.columns:
         df["gap_filled_columns"] = ""
@@ -1791,14 +2033,35 @@ def gap_fill_with_global_fallback(
         # Ensure it's properly initialized as string
         df["gap_filled_columns"] = df["gap_filled_columns"].fillna("").astype(str)
 
-    print(f"🔧 Gap-filling {len(spec)} columns using hierarchical approach...")
-
-    for col, levels in spec.items():
+    print(f"🔧 Gap-filling {len(spec)} columns using lookup table approach...")
+    
+    # Map of column names in spec to lookup table columns
+    col_mapping = {
+        'scenario_capacity_factor': 'capacity_factor',
+        'lifetime_years': 'lifetime', 
+        'efficiency_decimal': 'efficiency',
+        'om_cost_usd_per_mw_per_yr': 'om_cost',
+        'capital_cost_usd_per_mw': 'capital_cost'
+    }
+    
+    # Extract ISO2 codes from country_iso2_list for each row
+    def extract_iso2_codes(iso2_list_str):
+        if pd.isna(iso2_list_str) or not str(iso2_list_str).strip():
+            return []
+        return [code.strip() for code in str(iso2_list_str).split(',') if code.strip()]
+    
+    total_filled_by_col = {}
+    
+    for col in spec.keys():
         if col not in df.columns:
             print(f"   ⚠️ Skipping {col} - column not found")
             continue
 
-        agg = (agg_fn_per_col or {}).get(col, "median")
+        lookup_col = col_mapping.get(col, col)
+        if lookup_col not in lookup_table.columns:
+            print(f"   ⚠️ Skipping {col} - not in lookup table")
+            continue
+            
         missing_mask = df[col].isna()
         initial_missing_count = missing_mask.sum()
 
@@ -1806,175 +2069,98 @@ def gap_fill_with_global_fallback(
             print(f"   ✅ {col}: no missing values")
             continue
 
-        print(
-            f"   🔧 {col}: filling {initial_missing_count:,} missing values using {agg}..."
-        )
-
-        filled_series = df[col].copy()
-        rows_filled_this_column = pd.Series(
-            False, index=df.index
-        )  # Track what got filled for this column
-        level_fill_counts = []
-
-        # Process standard hierarchy levels first
-        for level_idx, level in enumerate(levels):
-            # Filter to only available columns
-            keys = [k for k in level if k in df.columns]
-            if not keys:
-                print(
-                    f"      Level {level_idx + 1}: {level} - no valid columns, skipping"
-                )
-                continue
-
-            # Check how many rows still need filling
-            still_missing = filled_series.isna()
-            if not still_missing.any():
-                break
-
-            # Calculate group statistics
-            try:
-                grp = df.groupby(keys, dropna=False)[col]
-                stats = grp.transform(agg)
-
-                # Identify rows that can be filled at this level
-                need = still_missing & stats.notna()
-                fill_count = need.sum()
-
-                if fill_count > 0:
-                    filled_series = filled_series.where(~need, stats)
-                    rows_filled_this_column |= (
-                        need  # Track cumulative fills for this column
-                    )
-                    level_fill_counts.append((level_idx + 1, keys, fill_count))
-                    print(
-                        f"      Level {level_idx + 1}: {keys} - filled {fill_count:,} values"
-                    )
-                else:
-                    print(f"      Level {level_idx + 1}: {keys} - no additional fills")
-
-            except Exception as e:
-                print(f"      Level {level_idx + 1}: {keys} - error: {e}")
-                continue
-
-        # Process Global geography fallback levels if data still missing
-        still_missing = filled_series.isna()
-        if still_missing.any() and "scenario_geography" in df.columns:
-            print(f"      Applying Global geography fallbacks for remaining {still_missing.sum():,} missing values...")
+        print(f"   🔧 {col}: filling {initial_missing_count:,} missing values using lookup table...")
+        
+        filled_count = 0
+        
+        # For each missing row, find best match in lookup table
+        for idx in df.index[missing_mask]:
+            tech = df.loc[idx, 'technology']
+            year = df.loc[idx, 'scenario_year'] 
+            stringency = df.loc[idx, 'stringency'] if 'stringency' in df.columns else None
+            iso2_list = extract_iso2_codes(df.loc[idx, 'country_iso2_list'])
             
-            for global_level_idx, global_level in enumerate(global_fallback_hierarchy):
-                keys = [k for k in global_level if k in df.columns]
-                if not keys:
-                    continue
-                
-                still_missing = filled_series.isna()
-                if not still_missing.any():
+            best_value = None
+            
+            # Lookup hierarchy: try specific stringency first, then fallback to NA stringency
+            for try_stringency in [stringency, None]:
+                if best_value is not None:
                     break
-                
-                # Create a subset with only Global geography data for the fallback calculation
-                global_data = df[df["scenario_geography"] == "Global"]
-                if global_data.empty:
-                    continue
-                
-                try:
-                    # Calculate statistics from Global data only
-                    if len(keys) == 1 and keys[0] in global_data.columns:
-                        # Simple case: group by single key
-                        global_stats = global_data.groupby(keys[0], dropna=False)[col].transform(agg)
-                        # Create a mapping from the key to the statistic
-                        key_to_stat = global_data.groupby(keys[0], dropna=False)[col].agg(agg).to_dict()
-                        # Map this back to the full dataframe
-                        full_stats = df[keys[0]].map(key_to_stat)
-                    else:
-                        # Multi-key case: create composite key
-                        global_data['_temp_key'] = global_data[keys].apply(lambda x: '|||'.join(x.astype(str)), axis=1)
-                        df['_temp_key'] = df[keys].apply(lambda x: '|||'.join(x.astype(str)), axis=1)
+
+                # For regional scenarios (multiple ISO2s), calculate median across constituent countries
+                if len(iso2_list) > 1:
+                    # Regional scenario - get values for all constituent countries
+                    regional_values = []
+                    for iso2 in iso2_list:
+                        lookup_mask = (
+                            (lookup_table['technology'] == tech) &
+                            (lookup_table['year'] == year) &
+                            (lookup_table['iso2'] == iso2) &
+                            (lookup_table['stringency'] == try_stringency) &
+                            (lookup_table[lookup_col].notna())
+                        )
                         
-                        key_to_stat = global_data.groupby('_temp_key', dropna=False)[col].agg(agg).to_dict()
-                        full_stats = df['_temp_key'].map(key_to_stat)
-                        
-                        # Clean up temporary columns
-                        global_data = global_data.drop(columns=['_temp_key'])
-                        df = df.drop(columns=['_temp_key'])
+                        matches = lookup_table.loc[lookup_mask, lookup_col]
+                        if not matches.empty:
+                            regional_values.append(matches.iloc[0])
                     
-                    # Apply Global fallback only to non-Global rows that are missing data
-                    need = still_missing & full_stats.notna() & (df["scenario_geography"] != "Global")
-                    fill_count = need.sum()
-                    
-                    if fill_count > 0:
-                        filled_series = filled_series.where(~need, full_stats)
-                        rows_filled_this_column |= need
-                        level_fill_counts.append((len(levels) + global_level_idx + 1, f"Global-{keys}", fill_count))
-                        print(f"      Global Level {global_level_idx + 1}: {keys} - filled {fill_count:,} values from Global data")
-                    else:
-                        print(f"      Global Level {global_level_idx + 1}: {keys} - no additional fills from Global data")
+                    if regional_values:
+                        best_value = pd.Series(regional_values).median()
+                        break
                         
-                except Exception as e:
-                    print(f"      Global Level {global_level_idx + 1}: {keys} - error: {e}")
-                    continue
-
-        # Update the column
-        df[col] = filled_series
-        final_missing_count = df[col].isna().sum()
-        total_filled = initial_missing_count - final_missing_count
-
-        print(
-            f"      Summary: {total_filled:,} values filled, {final_missing_count:,} still missing"
-        )
-
-        # Update gap_filled_columns tracking for rows that were originally missing AND got filled
-        actually_filled_mask = missing_mask & rows_filled_this_column
-        filled_indices = df.index[actually_filled_mask]
-
-        if len(filled_indices) > 0:
-            print(
-                f"      Tracking: updating gap_filled_columns for {len(filled_indices):,} rows"
-            )
-            for idx in filled_indices:
-                current_val = df.loc[idx, "gap_filled_columns"]
-                if pd.isna(current_val) or current_val == "":
+                else:
+                    # Single country scenario - direct lookup
+                    for iso2 in iso2_list:
+                        lookup_mask = (
+                            (lookup_table['technology'] == tech) &
+                            (lookup_table['year'] == year) &
+                            (lookup_table['iso2'] == iso2) &
+                            (lookup_table['stringency'] == try_stringency) &
+                            (lookup_table[lookup_col].notna())
+                        )
+                        
+                        matches = lookup_table.loc[lookup_mask, lookup_col]
+                        if not matches.empty:
+                            best_value = matches.iloc[0]  # Take first match
+                            break
+                
+                # If no ISO2 match found, try without ISO2 constraint (fallback)
+                if best_value is None:
+                    lookup_mask = (
+                        (lookup_table['technology'] == tech) &
+                        (lookup_table['year'] == year) &
+                        (lookup_table['stringency'] == try_stringency) &
+                        (lookup_table[lookup_col].notna())
+                    )
+                    
+                    matches = lookup_table.loc[lookup_mask, lookup_col]
+                    if not matches.empty:
+                        best_value = matches.median()  # Use median across all geographies
+            
+            # Apply the found value
+            if best_value is not None:
+                df.loc[idx, col] = best_value
+                filled_count += 1
+                
+                # Update tracking
+                current_tracking = df.loc[idx, "gap_filled_columns"] 
+                if pd.isna(current_tracking) or current_tracking == "":
                     df.loc[idx, "gap_filled_columns"] = col
                 else:
-                    df.loc[idx, "gap_filled_columns"] = str(current_val) + "," + col
-        else:
-            print(f"      Tracking: no rows to update for {col}")
-
-    # Summary statistics and debugging
+                    df.loc[idx, "gap_filled_columns"] = str(current_tracking) + "," + col
+        
+        total_filled_by_col[col] = filled_count
+        final_missing = df[col].isna().sum()
+        print(f"      Filled {filled_count:,} values, {final_missing:,} still missing")
+    
+    # Summary
     total_filled_rows = (df["gap_filled_columns"] != "").sum()
-    non_empty_tracking = df[df["gap_filled_columns"] != ""]
-
-    print(
-        f"   📊 Gap-filling complete: {total_filled_rows:,} rows received gap-filled values"
-    )
-
-    if total_filled_rows > 0:
-        # Show sample of tracking
-        sample_tracking = non_empty_tracking["gap_filled_columns"].head(5).tolist()
-        print(f"   📝 Sample gap_filled_columns values: {sample_tracking}")
-
-        # Show breakdown by column
-        all_filled_cols = []
-        for val in non_empty_tracking["gap_filled_columns"]:
-            if pd.notna(val) and val != "":
-                all_filled_cols.extend(val.split(","))
-
-        if all_filled_cols:
-            from collections import Counter
-
-            col_counts = Counter(all_filled_cols)
-            print(f"   📊 Columns filled breakdown:")
-            for col_name, count in col_counts.most_common():
-                print(f"     {col_name}: {count:,} rows")
-    else:
-        print(f"   ⚠️ WARNING: No gap-filled tracking recorded!")
-        # Debug: check if we have any non-empty strings
-        debug_non_empty = (df["gap_filled_columns"].fillna("") != "").sum()
-        debug_na_count = df["gap_filled_columns"].isna().sum()
-        print(
-            f"     Debug: {debug_non_empty} non-empty strings, {debug_na_count} NA values"
-        )
-        print(
-            f"     Debug: Sample values: {df['gap_filled_columns'].head(10).tolist()}"
-        )
+    print(f"   📊 Gap-filling complete: {total_filled_rows:,} rows received gap-filled values")
+    
+    if total_filled_by_col:
+        print(f"   📊 Columns filled breakdown:")
+        for col_name, count in total_filled_by_col.items():
+            print(f"     {col_name}: {count:,} rows")
 
     return df
 
@@ -2050,6 +2236,65 @@ def step4_aggregate_and_gapfill() -> None:
         ).astype("Int64")
 
     print(f"Data types fixed. Shape: {df.shape}")
+
+    # ===== OILCAP COST HEURISTIC =====
+    # Apply OilCap cost heuristic: use average of GasCap and CoalCap costs
+    print("🛢️ Applying OilCap cost heuristic (average of GasCap and CoalCap)...")
+    
+    oilcap_mask = df["technology"].str.contains("OilCap", na=False)
+    oilcap_rows = oilcap_mask.sum()
+    print(f"   Found {oilcap_rows:,} OilCap rows")
+    
+    if oilcap_rows > 0:
+        # Group by scenario dimensions for cost averaging
+        cost_grouping_cols = [
+            "scenario_provider", "scenario", "scenario_geography", 
+            "scenario_year", "sector"
+        ]
+        cost_cols = ["capital_cost_usd_per_mw", "om_cost_usd_per_mw_per_yr"]
+        
+        filled_counts = {"capital_cost": 0, "om_cost": 0}
+        
+        for cost_col in cost_cols:
+            if cost_col not in df.columns:
+                continue
+                
+            # Find OilCap rows missing this cost
+            missing_cost_mask = oilcap_mask & df[cost_col].isna()
+            missing_count = missing_cost_mask.sum()
+            
+            if missing_count > 0:
+                print(f"   Filling {missing_count:,} missing {cost_col} values for OilCap...")
+                
+                # For each missing OilCap row, find GasCap and CoalCap costs in same scenario/geography/year
+                for idx in df.index[missing_cost_mask]:
+                    scenario_data = df.loc[idx, cost_grouping_cols].to_dict()
+                    
+                    # Find GasCap and CoalCap costs for same scenario/geography/year
+                    base_mask = True
+                    for col, val in scenario_data.items():
+                        if col in df.columns:
+                            base_mask = base_mask & (df[col] == val)
+                    
+                    gas_mask = base_mask & df["technology"].str.contains("GasCap", na=False)
+                    coal_mask = base_mask & df["technology"].str.contains("CoalCap", na=False)
+                    
+                    gas_costs = df.loc[gas_mask & df[cost_col].notna(), cost_col]
+                    coal_costs = df.loc[coal_mask & df[cost_col].notna(), cost_col]
+                    
+                    # Calculate average if both are available
+                    costs_to_average = []
+                    if not gas_costs.empty:
+                        costs_to_average.append(gas_costs.mean())
+                    if not coal_costs.empty:
+                        costs_to_average.append(coal_costs.mean())
+                    
+                    if costs_to_average:
+                        avg_cost = sum(costs_to_average) / len(costs_to_average)
+                        df.loc[idx, cost_col] = avg_cost
+                        filled_counts[cost_col.split("_")[0]] += 1
+        
+        print(f"   OilCap heuristic filled: {filled_counts['capital']} capital costs, {filled_counts['om']} OM costs")
 
     # ===== TECHNOLOGY MAPPING DISABLED =====
     # Skip technology mapping to keep all technologies separate
@@ -2371,7 +2616,7 @@ def step4_aggregate_and_gapfill() -> None:
         ]
 
     agg_fn = {"fuel_price": "mean"}  # use mean for fuel cascade; median elsewhere
-    aggregated = gap_fill_with_global_fallback(aggregated, gap_spec, global_fallback_hierarchy, agg_fn)
+    aggregated = gap_fill_with_lookup_table(aggregated, gap_spec, global_fallback_hierarchy, agg_fn)
 
     # Scenario type update based on stringency values
     if "scenario_type" in aggregated.columns:
@@ -2423,8 +2668,20 @@ def step4_aggregate_and_gapfill() -> None:
         else pd.Series(True, index=aggregated.index)
     )
     if "efficiency_decimal" in aggregated.columns:
+        # Define renewable technologies that should have efficiency data
+        renewable_tech_keywords = [
+            'Solar', 'Wind', 'Hydro', 'Geothermal', 'Nuclear', 
+            'Non-Biomass Renewables', 'Electricity - Non-Biomass Renewables'
+        ]
+        
+        # Create mask for renewable technologies
+        is_renewable = aggregated["technology"].astype(str).apply(
+            lambda x: any(keyword in x for keyword in renewable_tech_keywords)
+        )
+        
+        # Efficiency condition: renewable technologies OR legacy Renewables sector should have efficiency
         eff_cond = ~(
-            aggregated["sector"].isin(["Power", "Renewables"])
+            (aggregated["sector"].isin(["Power", "Renewables"]) | is_renewable)
             & aggregated["efficiency_decimal"].isna()
         )
         complete_mask = complete_mask & eff_cond
