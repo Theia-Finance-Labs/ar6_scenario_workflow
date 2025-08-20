@@ -659,17 +659,15 @@ def step2_filter_and_pivot() -> None:
     if "efficiency_percent" not in pivoted.columns:
         pivoted["efficiency_percent"] = np.nan
     
-    # Define renewable technologies (now in Power sector, not Renewables sector)
-    renewable_tech_keywords = [
-        'Solar', 'Wind', 'Hydro', 'Geothermal', 'Nuclear', 
-        'Non-Biomass Renewables', 'Electricity - Non-Biomass Renewables'
+    # Define exact renewable technology names for fast matching
+    renewable_techs = [
+        "SolarCap", "WindCap", "HydroCap", "GeothermalCap", "NuclearCap", "OceanCap",
+        "Non-Biomass Renewables", "Electricity - Non-Biomass Renewables"
     ]
     
-    # Create mask for renewable technologies based on technology name
+    # Create mask for renewable technologies using exact matching
     tech_col = "Technology" if "Technology" in pivoted.columns else "technology"
-    renewable_mask = pivoted[tech_col].astype(str).apply(
-        lambda x: any(keyword in x for keyword in renewable_tech_keywords)
-    )
+    renewable_mask = pivoted[tech_col].isin(renewable_techs)
     
     # Also include old-style renewables sector if it exists
     if "Sector" in pivoted.columns:
@@ -898,28 +896,49 @@ def load_step1_for_price() -> Optional[pd.DataFrame]:
 
 
 def _normalize_fuel_label(label: str) -> str:
-    s = str(label).strip().lower()
-    if not s or s == "nan":
+    """Fast fuel normalization using exact matching where possible"""
+    s = str(label).strip()
+    if not s or s.lower() == "nan":
         return ""
-    if "electric" in s:
+    
+    # Exact matches first (fastest)
+    exact_map = {
+        "Electricity": "Electricity", "electricity": "Electricity",
+        "Gas": "Gas", "gas": "Gas", "Gases": "Gas", "gases": "Gas",
+        "Oil": "Oil", "oil": "Oil", "Liquid": "Oil", "liquid": "Oil", "Liquids": "Oil", "liquids": "Oil",
+        "Coal": "Coal", "coal": "Coal", "Solid": "Coal", "solid": "Coal", "Solids": "Coal", "solids": "Coal",
+        "Biomass": "Biomass", "biomass": "Biomass",
+        "Nuclear": "Nuclear", "nuclear": "Nuclear",
+        "Hydro": "Hydro", "hydro": "Hydro",
+        "Solar": "Solar", "solar": "Solar",
+        "Wind": "Wind", "wind": "Wind",
+        "Geothermal": "Geothermal", "geothermal": "Geothermal"
+    }
+    
+    if s in exact_map:
+        return exact_map[s]
+    
+    # Fallback to contains for edge cases
+    s_lower = s.lower()
+    if "electric" in s_lower:
         return "Electricity"
-    if "gas" in s or "gases" in s:
+    if "gas" in s_lower:
         return "Gas"
-    if "oil" in s or "liquid" in s or "liquids" in s:
+    if "oil" in s_lower or "liquid" in s_lower:
         return "Oil"
-    if "coal" in s or "solid" in s or "solids" in s:
+    if "coal" in s_lower or "solid" in s_lower:
         return "Coal"
-    if "biomass" in s or s.startswith("bio"):
+    if "biomass" in s_lower or s_lower.startswith("bio"):
         return "Biomass"
-    if "nuclear" in s:
+    if "nuclear" in s_lower:
         return "Nuclear"
-    if "hydro" in s:
+    if "hydro" in s_lower:
         return "Hydro"
-    if "solar" in s:
+    if "solar" in s_lower:
         return "Solar"
-    if "wind" in s:
+    if "wind" in s_lower:
         return "Wind"
-    if "geothermal" in s:
+    if "geothermal" in s_lower:
         return "Geothermal"
     return s.title()
 
@@ -1137,14 +1156,12 @@ def step3_finalize_target_schema() -> None:
     target = target.drop(columns=["fuel_for_price_norm"], errors="ignore")
     
     # Set fuel_price to 0 for renewable technologies (they don't consume fuel)
-    renewable_tech_keywords = [
-        'Solar', 'Wind', 'Hydro', 'Geothermal', 'Nuclear', 
-        'Non-Biomass Renewables', 'Electricity - Non-Biomass Renewables'
+    renewable_techs = [
+        "SolarCap", "WindCap", "HydroCap", "GeothermalCap", "NuclearCap", "OceanCap",
+        "Non-Biomass Renewables", "Electricity - Non-Biomass Renewables"
     ]
     
-    is_renewable_tech = target["technology"].astype(str).apply(
-        lambda x: any(keyword in x for keyword in renewable_tech_keywords)
-    )
+    is_renewable_tech = target["technology"].isin(renewable_techs)
     
     # Set fuel price to 0 for renewables (free fuel)
     target.loc[is_renewable_tech, "fuel_price"] = 0.0
@@ -1364,6 +1381,10 @@ def step3_finalize_target_schema() -> None:
     print_banner("STEP 3a — Creating Global Geography Aggregations")
     target_with_global = create_global_geography(target)
 
+    # Apply OilCap cost heuristic (CCS-aware) before temporal interpolation
+    print_banner("STEP 3b — OilCap Cost Heuristic (CCS-Aware)")
+    target_with_global = apply_oilcap_cost_heuristic(target_with_global)
+
     # Save and cleanup
     out = "3_final_AR6_target_schema.csv"
     cols = [
@@ -1400,6 +1421,133 @@ def step3_finalize_target_schema() -> None:
 # ======================================
 # Global Aggregation Helper
 # ======================================
+
+
+def apply_oilcap_cost_heuristic(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Apply CCS-aware OilCap cost heuristic: 
+    - OilCap w/ CCS = average(GasCap w/ CCS, CoalCap w/ CCS)
+    - OilCap w/o CCS = average(GasCap w/o CCS, CoalCap w/o CCS)
+    """
+    print("🛢️ Applying CCS-aware OilCap cost heuristic...")
+    
+    df_result = df.copy()
+    cost_cols = ["capital_cost_usd_per_mw", "om_cost_usd_per_mw_per_yr"]
+    available_cost_cols = [col for col in cost_cols if col in df.columns]
+    
+    if not available_cost_cols:
+        print("   No cost columns found, skipping OilCap heuristic")
+        return df_result
+    
+    # Define exact technology names for fast exact matching
+    oilcap_techs = ["OilCap", "OilCap_w/ CCS", "OilCap_w/o CCS"]
+    gascap_techs = ["GasCap", "GasCap_w/ CCS", "GasCap_w/o CCS"]
+    coalcap_techs = ["CoalCap", "CoalCap_w/ CCS", "CoalCap_w/o CCS"]
+    
+    # Technology to CCS status mapping
+    tech_ccs_map = {
+        "OilCap": "unknown", "GasCap": "unknown", "CoalCap": "unknown",
+        "OilCap_w/ CCS": "with_ccs", "GasCap_w/ CCS": "with_ccs", "CoalCap_w/ CCS": "with_ccs",
+        "OilCap_w/o CCS": "without_ccs", "GasCap_w/o CCS": "without_ccs", "CoalCap_w/o CCS": "without_ccs"
+    }
+    
+    # Identify OilCap technologies using exact matching
+    oilcap_mask = df["technology"].isin(oilcap_techs)
+    if not oilcap_mask.any():
+        print("   No OilCap technologies found")
+        return df_result
+    
+    filled_counts = {col: 0 for col in available_cost_cols}
+    
+    for cost_col in available_cost_cols:
+        print(f"   Processing {cost_col}...")
+        
+        # Find OilCap rows missing this cost
+        missing_mask = oilcap_mask & df[cost_col].isna()
+        
+        if not missing_mask.any():
+            print(f"     No missing {cost_col} values for OilCap")
+            continue
+            
+        print(f"     Filling {missing_mask.sum():,} missing {cost_col} values")
+        
+        # Group by scenario dimensions to calculate averages efficiently
+        grouping_cols = [
+            "scenario_provider", "scenario", "scenario_geography", 
+            "scenario_year", "sector"
+        ]
+        
+        # Map technologies to CCS status using exact matching
+        df_result["_ccs_status"] = df_result["technology"].map(tech_ccs_map).fillna("unknown")
+        
+        # Calculate GasCap and CoalCap averages by CCS status
+        for ccs_status in ["with_ccs", "without_ccs", "unknown"]:
+            ccs_mask = df_result["_ccs_status"] == ccs_status
+            oil_missing = missing_mask & ccs_mask
+            
+            if not oil_missing.any():
+                continue
+                
+            print(f"       Processing CCS status: {ccs_status} ({oil_missing.sum():,} rows)")
+            
+            # Find corresponding Gas and Coal technologies with same CCS status using exact matching
+            gas_techs_for_ccs = [tech for tech in gascap_techs if tech_ccs_map.get(tech) == ccs_status]
+            coal_techs_for_ccs = [tech for tech in coalcap_techs if tech_ccs_map.get(tech) == ccs_status]
+            
+            gas_mask = df_result["technology"].isin(gas_techs_for_ccs)
+            coal_mask = df_result["technology"].isin(coal_techs_for_ccs)
+            
+            # Calculate averages by grouping dimensions
+            gas_avg = (df_result.loc[gas_mask, grouping_cols + [cost_col]]
+                      .groupby(grouping_cols, as_index=False)[cost_col]
+                      .mean()
+                      .rename(columns={cost_col: f"{cost_col}_gas"}))
+            
+            coal_avg = (df_result.loc[coal_mask, grouping_cols + [cost_col]]
+                       .groupby(grouping_cols, as_index=False)[cost_col]
+                       .mean()
+                       .rename(columns={cost_col: f"{cost_col}_coal"}))
+            
+            # Merge averages
+            oil_data = df_result.loc[oil_missing, grouping_cols].reset_index()
+            oil_with_gas = oil_data.merge(gas_avg, on=grouping_cols, how="left")
+            oil_with_both = oil_with_gas.merge(coal_avg, on=grouping_cols, how="left")
+            
+            # Calculate OilCap cost as average of Gas and Coal
+            gas_col = f"{cost_col}_gas"
+            coal_col = f"{cost_col}_coal"
+            
+            # Calculate average where both are available
+            both_available = oil_with_both[gas_col].notna() & oil_with_both[coal_col].notna()
+            oil_with_both.loc[both_available, f"{cost_col}_avg"] = (
+                (oil_with_both.loc[both_available, gas_col] + 
+                 oil_with_both.loc[both_available, coal_col]) / 2
+            )
+            
+            # Use single value where only one is available
+            only_gas = oil_with_both[gas_col].notna() & oil_with_both[coal_col].isna()
+            oil_with_both.loc[only_gas, f"{cost_col}_avg"] = oil_with_both.loc[only_gas, gas_col]
+            
+            only_coal = oil_with_both[gas_col].isna() & oil_with_both[coal_col].notna()
+            oil_with_both.loc[only_coal, f"{cost_col}_avg"] = oil_with_both.loc[only_coal, coal_col]
+            
+            # Apply calculated values back to dataframe
+            filled_values = oil_with_both[f"{cost_col}_avg"].notna()
+            if filled_values.any():
+                original_indices = oil_with_both.loc[filled_values, "index"]
+                df_result.loc[original_indices, cost_col] = oil_with_both.loc[filled_values, f"{cost_col}_avg"].values
+                filled_counts[cost_col] += filled_values.sum()
+        
+        # Clean up temporary column
+        df_result = df_result.drop(columns=["_ccs_status"])
+    
+    total_filled = sum(filled_counts.values())
+    print(f"   OilCap heuristic completed: {total_filled:,} cost values filled")
+    for col, count in filled_counts.items():
+        if count > 0:
+            print(f"     {col}: {count:,} values")
+    
+    return df_result
 
 
 def create_global_geography(df_in: pd.DataFrame) -> pd.DataFrame:
@@ -1769,9 +1917,9 @@ def temporal_interpolation(
 
 def vectorized_mapping(df_in: pd.DataFrame, mapping_df: pd.DataFrame) -> pd.DataFrame:
     """Vectorized sector/technology mapping via merge instead of row-wise loops."""
-    left = df_in.copy()
-    right = mapping_df.copy()
-    
+        left = df_in.copy()
+        right = mapping_df.copy()
+
     right = right.rename(
         columns={
             "current_sector": "sector",
@@ -1782,7 +1930,7 @@ def vectorized_mapping(df_in: pd.DataFrame, mapping_df: pd.DataFrame) -> pd.Data
         right[
             [
                 "sector",
-                "technology", 
+                "technology",
                 "target_sector",
                 "target_technology",
                 "aggregation_group",
@@ -1847,20 +1995,33 @@ def build_iso2_geographic_similarity_matrix(df: pd.DataFrame) -> Dict[str, Dict[
 
 def create_technology_lookup_table(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Create a comprehensive lookup table with best available values for each
-    technology/year/iso2/stringency combination using hierarchical gap-filling.
+    Create a focused lookup table with best available values for only the technologies we actually use.
     
     Returns DataFrame with columns:
     technology, year, iso2, stringency, capital_cost, om_cost, efficiency, lifetime, capacity_factor
     """
     print("📋 Creating technology lookup table...")
     
-    # Extract all unique combinations
-    unique_techs = df['technology'].unique()
+    # Define the 15 target technologies we actually use (much faster than all 46)
+    target_techs = [
+        # Core power technologies
+        "SolarCap", "WindCap", "HydroCap", "GeothermalCap", "NuclearCap", 
+        "BiomassCap", "CoalCap", "GasCap", "OilCap",
+        # CCS variants
+        "BiomassCap_w/ CCS", "CoalCap_w/ CCS", "GasCap_w/ CCS", "OilCap_w/ CCS",
+        "BiomassCap_w/o CCS", "CoalCap_w/o CCS", "GasCap_w/o CCS", "OilCap_w/o CCS",
+        # Other renewables
+        "OceanCap", "Non-Biomass Renewables", "Electricity - Non-Biomass Renewables"
+    ]
+    
+    # Only use technologies that exist in our data AND are in our target list
+    available_techs = df['technology'].unique()
+    unique_techs = [tech for tech in target_techs if tech in available_techs]
+    
     unique_years = sorted(df['scenario_year'].unique())
     unique_stringencies = sorted(df['stringency'].unique()) if 'stringency' in df.columns else ['']
     
-    # Get all ISO2 codes from country_iso2_list
+    # Get only ISO2 codes that are actually used in the data
     all_iso2s = set()
     for iso2_list in df['country_iso2_list'].dropna():
         if str(iso2_list).strip():
@@ -1868,7 +2029,8 @@ def create_technology_lookup_table(df: pd.DataFrame) -> pd.DataFrame:
             all_iso2s.update(iso2s)
     all_iso2s = sorted(all_iso2s)
     
-    print(f"   Building lookup for {len(unique_techs)} techs × {len(unique_years)} years × {len(all_iso2s)} ISO2s × {len(unique_stringencies)} stringencies")
+    print(f"   Building lookup for {len(unique_techs)} target techs × {len(unique_years)} years × {len(all_iso2s)} ISO2s × {len(unique_stringencies)} stringencies")
+    print(f"   Target technologies: {unique_techs}")
     
     # Columns to populate
     value_cols = ['capital_cost_usd_per_mw', 'om_cost_usd_per_mw_per_yr', 'efficiency_decimal', 'lifetime_years', 'scenario_capacity_factor']
@@ -2022,10 +2184,17 @@ def gap_fill_with_lookup_table(
     Returns:
         DataFrame with gap-filled values and tracking of which columns were filled
     """
-    df = df_in.copy()
+        df = df_in.copy()
     
-    # Create comprehensive technology lookup table
-    lookup_table = create_technology_lookup_table(df)
+    # Try to load pre-computed lookup table first, create if not available
+    try:
+        lookup_table = pd.read_csv("technology_lookup_table.csv")
+        print("🚀 Using pre-computed technology lookup table")
+        print(f"   Loaded: {lookup_table.shape[0]:,} rows × {lookup_table.shape[1]} columns")
+    except FileNotFoundError:
+        print("📋 Pre-computed lookup table not found, creating new one...")
+        print("   💡 Tip: Run 'python3 create_technology_lookup.py' once to speed up future runs")
+        lookup_table = create_technology_lookup_table(df)
 
     if "gap_filled_columns" not in df.columns:
         df["gap_filled_columns"] = ""
@@ -2085,7 +2254,7 @@ def gap_fill_with_lookup_table(
             # Lookup hierarchy: try specific stringency first, then fallback to NA stringency
             for try_stringency in [stringency, None]:
                 if best_value is not None:
-                    break
+                break
 
                 # For regional scenarios (multiple ISO2s), calculate median across constituent countries
                 if len(iso2_list) > 1:
@@ -2158,9 +2327,9 @@ def gap_fill_with_lookup_table(
     print(f"   📊 Gap-filling complete: {total_filled_rows:,} rows received gap-filled values")
     
     if total_filled_by_col:
-        print(f"   📊 Columns filled breakdown:")
+            print(f"   📊 Columns filled breakdown:")
         for col_name, count in total_filled_by_col.items():
-            print(f"     {col_name}: {count:,} rows")
+                print(f"     {col_name}: {count:,} rows")
 
     return df
 
@@ -2168,12 +2337,7 @@ def gap_fill_with_lookup_table(
 def step4_aggregate_and_gapfill() -> None:
     print_banner("STEP 4 — Aggregate Technologies and Gap-Fill")
     df = pd.read_csv("3_final_AR6_target_schema.csv")
-    # Technology mapping disabled - no longer required
-    # try:
-    #     mapping_df = pd.read_csv("technology_mapping.csv")
-    # except FileNotFoundError:
-    #     print("❌ Missing technology_mapping.csv — aborting step 4")
-    #     return
+
     mapping_df = None  # Not used when mapping is disabled
 
     # Temporal interpolation BEFORE aggregation and gap-filling
@@ -2237,181 +2401,9 @@ def step4_aggregate_and_gapfill() -> None:
 
     print(f"Data types fixed. Shape: {df.shape}")
 
-    # ===== OILCAP COST HEURISTIC =====
-    # Apply OilCap cost heuristic: use average of GasCap and CoalCap costs
-    print("🛢️ Applying OilCap cost heuristic (average of GasCap and CoalCap)...")
-    
-    oilcap_mask = df["technology"].str.contains("OilCap", na=False)
-    oilcap_rows = oilcap_mask.sum()
-    print(f"   Found {oilcap_rows:,} OilCap rows")
-    
-    if oilcap_rows > 0:
-        # Group by scenario dimensions for cost averaging
-        cost_grouping_cols = [
-            "scenario_provider", "scenario", "scenario_geography", 
-            "scenario_year", "sector"
-        ]
-        cost_cols = ["capital_cost_usd_per_mw", "om_cost_usd_per_mw_per_yr"]
-        
-        filled_counts = {"capital_cost": 0, "om_cost": 0}
-        
-        for cost_col in cost_cols:
-            if cost_col not in df.columns:
-                continue
-                
-            # Find OilCap rows missing this cost
-            missing_cost_mask = oilcap_mask & df[cost_col].isna()
-            missing_count = missing_cost_mask.sum()
-            
-            if missing_count > 0:
-                print(f"   Filling {missing_count:,} missing {cost_col} values for OilCap...")
-                
-                # For each missing OilCap row, find GasCap and CoalCap costs in same scenario/geography/year
-                for idx in df.index[missing_cost_mask]:
-                    scenario_data = df.loc[idx, cost_grouping_cols].to_dict()
-                    
-                    # Find GasCap and CoalCap costs for same scenario/geography/year
-                    base_mask = True
-                    for col, val in scenario_data.items():
-                        if col in df.columns:
-                            base_mask = base_mask & (df[col] == val)
-                    
-                    gas_mask = base_mask & df["technology"].str.contains("GasCap", na=False)
-                    coal_mask = base_mask & df["technology"].str.contains("CoalCap", na=False)
-                    
-                    gas_costs = df.loc[gas_mask & df[cost_col].notna(), cost_col]
-                    coal_costs = df.loc[coal_mask & df[cost_col].notna(), cost_col]
-                    
-                    # Calculate average if both are available
-                    costs_to_average = []
-                    if not gas_costs.empty:
-                        costs_to_average.append(gas_costs.mean())
-                    if not coal_costs.empty:
-                        costs_to_average.append(coal_costs.mean())
-                    
-                    if costs_to_average:
-                        avg_cost = sum(costs_to_average) / len(costs_to_average)
-                        df.loc[idx, cost_col] = avg_cost
-                        filled_counts[cost_col.split("_")[0]] += 1
-        
-        print(f"   OilCap heuristic filled: {filled_counts['capital']} capital costs, {filled_counts['om']} OM costs")
 
-    # ===== TECHNOLOGY MAPPING DISABLED =====
-    # Skip technology mapping to keep all technologies separate
-    # This prevents artificial aggregation of different technology variants
-    print("🚫 Technology mapping DISABLED - keeping all technologies separate")
+
     df_map = df.copy()  # Use original data without any technology mapping
-
-    # # Vectorized mapping from mapping file (first pass)
-    # df_map = vectorized_mapping(df, mapping_df)
-    # df_map["sector"] = df_map["target_sector"]
-    # df_map["technology"] = df_map["target_technology"]
-
-    # # Enforce canonical final targets
-    # FINAL_TARGETS: set[tuple[str, str]] = {
-    #     ("Coal", "Coal"),
-    #     ("Oil&Gas", "Oil"),
-    #     ("Oil&Gas", "Gas"),
-    #     ("Power", "SolarCap"),
-    #     ("Power", "CoalCap"),
-    #     ("Power", "GasCap"),
-    #     ("Power", "OilCap"),
-    #     ("Power", "BiomassCap"),
-    #     ("Power", "WindCap"),
-    #     ("Power", "HydroCap"),
-    #     ("Power", "NuclearCap"),
-    #     ("Power", "GeothermalCap"),
-    #     ("Steel", "BF-BOF"),
-    #     ("Steel", "DRI-BOF"),
-    #     ("Steel", "EAF"),
-    # }
-
-    # def canonicalize_to_final_targets(df_in: pd.DataFrame) -> pd.DataFrame:
-    #     dfc = df_in.copy()
-    #     sec = dfc["sector"].astype(str).str.lower()
-    #     tech = dfc["technology"].astype(str).str.lower()
-
-    #     # Start with identity
-    #     sec_out = dfc["sector"].astype(str).copy()
-    #     tech_out = dfc["technology"].astype(str).copy()
-
-    #     # Normalize sector names first
-    #     sec_out = sec_out.mask(sec.isin(["gas&oil", "oil&gas"]), "Oil&Gas")
-
-    #     # Coal sector → (Coal, Coal)
-    #     coal_mask = sec.eq("coal")
-    #     sec_out = sec_out.mask(coal_mask, "Coal")
-    #     tech_out = tech_out.mask(coal_mask, "Coal")
-
-    #     # Oil&Gas sector → tech either Oil or Gas
-    #     og_mask = sec.isin(["oil&gas", "gas&oil"]) | sec_out.eq("Oil&Gas")
-    #     gas_mask = og_mask & (tech.str.contains("gas"))
-    #     oil_mask = og_mask & (tech.str.contains("oil"))
-    #     sec_out = sec_out.mask(og_mask, "Oil&Gas")
-    #     tech_out = tech_out.mask(gas_mask, "Gas")
-    #     tech_out = tech_out.mask(oil_mask, "Oil")
-
-    #     # Power-like sectors (Power, Renewables, Nuclear → Power)
-    #     power_like = sec.isin(["power", "renewables", "nuclear"]) | sec_out.isin(["Power", "Renewables", "Nuclear"])
-    #     sec_out = sec_out.mask(power_like, "Power")
-
-    #     # Map power technologies to Cap variants
-    #     def map_power_tech(name: str) -> str:
-    #         n = name.lower()
-    #         if any(k in n for k in ["solar", "pv", "csp"]):
-    #             return "SolarCap"
-    #         if "wind" in n:
-    #             return "WindCap"
-    #         if "hydro" in n:
-    #             return "HydroCap"
-    #         if "nuclear" in n:
-    #             return "NuclearCap"
-    #         if "geothermal" in n:
-    #             return "GeothermalCap"
-    #         if any(k in n for k in ["biomass", "bio"]):
-    #             return "BiomassCap"
-    #         if "coal" in n:
-    #             return "CoalCap"
-    #         if "gas" in n:
-    #             return "GasCap"
-    #         if "oil" in n:
-    #             return "OilCap"
-    #         return name
-
-    #     power_idx = power_like[power_like].index
-    #     tech_out.loc[power_idx] = tech_out.loc[power_idx].apply(map_power_tech)
-
-    #     # Steel mapping to 3 categories
-    #     steel_mask = sec.eq("steel") | sec_out.eq("Steel")
-    #     def map_steel_tech(name: str) -> str:
-    #         n = name.lower()
-    #         if "dri" in n:
-    #             return "DRI-BOF"
-    #         if "eaf" in n:
-    #             return "EAF"
-    #         # default steel route
-    #         return "BF-BOF"
-
-    #     steel_idx = steel_mask[steel_mask].index
-    #     sec_out = sec_out.mask(steel_mask, "Steel")
-    #     tech_out.loc[steel_idx] = tech_out.loc[steel_idx].apply(map_steel_tech)
-
-    #     # Apply canonical
-    #     dfc["sector"] = sec_out
-    #     dfc["technology"] = tech_out
-
-    #     # Filter to final allowed set
-    #     pair = list(zip(dfc["sector"], dfc["technology"]))
-    #     keep = [p in FINAL_TARGETS for p in pair]
-    #     return dfc.loc[keep].copy()
-
-    # before_rows = len(df_map)
-    # df_map = canonicalize_to_final_targets(df_map)
-    # after_rows = len(df_map)
-    # print(f"Canonical targets: kept {after_rows:,}/{before_rows:,} rows")
-
-    print(f"Keeping all original technologies: {len(df_map):,} rows")
-
     # Grouping keys
     grouping_cols = [
         c
@@ -2668,16 +2660,14 @@ def step4_aggregate_and_gapfill() -> None:
         else pd.Series(True, index=aggregated.index)
     )
     if "efficiency_decimal" in aggregated.columns:
-        # Define renewable technologies that should have efficiency data
-        renewable_tech_keywords = [
-            'Solar', 'Wind', 'Hydro', 'Geothermal', 'Nuclear', 
-            'Non-Biomass Renewables', 'Electricity - Non-Biomass Renewables'
+        # Define exact renewable technology names that should have efficiency data
+        renewable_techs = [
+            "SolarCap", "WindCap", "HydroCap", "GeothermalCap", "NuclearCap", "OceanCap",
+            "Non-Biomass Renewables", "Electricity - Non-Biomass Renewables"
         ]
         
-        # Create mask for renewable technologies
-        is_renewable = aggregated["technology"].astype(str).apply(
-            lambda x: any(keyword in x for keyword in renewable_tech_keywords)
-        )
+        # Create mask for renewable technologies using exact matching
+        is_renewable = aggregated["technology"].isin(renewable_techs)
         
         # Efficiency condition: renewable technologies OR legacy Renewables sector should have efficiency
         eff_cond = ~(
