@@ -2352,7 +2352,13 @@ def gap_fill_with_lookup_table(
                             successful_mask = merged_lookup[lookup_col].notna()
                             value_col = lookup_col
                         else:
+                            # Debug information for troubleshooting
                             print(f"   ⚠️ Warning: lookup_col '{lookup_col}' not found in merged_lookup")
+                            print(f"      Available columns in merged_lookup: {list(merged_lookup.columns)}")
+                            print(f"      Merged lookup shape: {merged_lookup.shape}")
+                            if lookup_col in lookup_table.columns:
+                                non_null_count = lookup_table[lookup_col].notna().sum()
+                                print(f"      '{lookup_col}' exists in lookup_table with {non_null_count} non-null values")
                             successful_mask = pd.Series(False, index=merged_lookup.index)
                             value_col = None
                         
