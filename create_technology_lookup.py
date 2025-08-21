@@ -35,18 +35,16 @@ def load_and_process_raw_ar6() -> pd.DataFrame:
     """Load RAW AR6 data and immediately filter to only needed variables for maximum efficiency"""
     print("📂 Loading RAW AR6 data from ALL models (optimized for lookup generation)...")
     
-    # Variables we need for the lookup table (simplified to core metrics only)
+    # Variables we need for the lookup table (comprehensive technology & price data)
     target_variables = [
-        # Cost variables
-        "Capital Cost", "OM Cost",
-        # Efficiency variables  
-        "Efficiency",
-        # Lifetime
-        "Lifetime"
+        # Technology characteristics
+        "Capital Cost", "OM Cost", "Efficiency", "Lifetime",
+        # Price data (fuel and electricity prices)
+        "Price"
     ]
     
-    # Target sectors we care about
-    target_sectors = ["Steel", "Nuclear", "Gas&Oil", "Cement", "Coal", "Renewables", "Power"]
+    # Target sectors we care about (including Biomass for price data)
+    target_sectors = ["Steel", "Nuclear", "Gas&Oil", "Cement", "Coal", "Renewables", "Power", "Biomass"]
     
     # Try to load raw feather files
     raw_files = [
@@ -66,7 +64,7 @@ def load_and_process_raw_ar6() -> pd.DataFrame:
             # ULTRA-FAST PRE-FILTERING: Only keep variables we need
             print(f"   🔍 Pre-filtering to target variables...")
             variable_mask = raw_df['Variable'].str.contains('|'.join([
-                'Capital Cost', 'OM Cost', 'Efficiency', 'Lifetime'
+                'Capital Cost', 'OM Cost', 'Efficiency', 'Lifetime', 'Price'
             ]), na=False, case=False)
             
             filtered_df = raw_df[variable_mask].copy()
@@ -113,17 +111,28 @@ def process_melted_data_for_lookup(raw_df: pd.DataFrame) -> pd.DataFrame:
     """Process raw AR6 data directly in melted format for ultra-fast lookup creation"""
     print("⚡ Processing data in melted format (before pivoting - MUCH faster)...")
     
-    # Target technologies we care about
+    # Target technologies that ACTUALLY EXIST in AR6 data (based on ar6_variables_with_mapping.csv)
     target_techs = [
+        # Base technologies (from mapping file)
         "SolarCap", "WindCap", "HydroCap", "GeothermalCap", "NuclearCap", 
         "BiomassCap", "CoalCap", "GasCap", "OilCap",
-        "BiomassCap_w/ CCS", "CoalCap_w/ CCS", "GasCap_w/ CCS", "OilCap_w/ CCS",
-        "BiomassCap_w/o CCS", "CoalCap_w/o CCS", "GasCap_w/o CCS", "OilCap_w/o CCS",
-        "OceanCap", "Non-Biomass Renewables", "Electricity - Non-Biomass Renewables"
+        # CCS variants ONLY with dashes (actual AR6 format from mapping file)
+        "BiomassCap - w/ CCS", "CoalCap - w/ CCS", "GasCap - w/ CCS", "OilCap - w/ CCS",
+        "BiomassCap - w/o CCS", "CoalCap - w/o CCS", "GasCap - w/o CCS", "OilCap - w/o CCS",
+        # Other technologies
+        "OceanCap", "Non-Biomass Renewables", "Electricity - Non-Biomass Renewables",
+        # Additional efficiency-specific technology names
+        "Oil", "Heating",
+        # Simple fuel names (needed for price data processing!)
+        "Coal", "Gas", "Biomass", "Electricity"
     ]
     
     # Identify year columns (2023-2050 inclusive)
-    id_cols = ["Model", "Scenario", "Region", "Variable", "Unit"]
+    # For price data we need to handle the different structure (col1, col2, Fuel columns)
+    base_id_cols = ["Model", "Scenario", "Region", "Variable", "Unit"]
+    
+    # The raw AR6 data is in wide format - need to melt it
+    id_cols = base_id_cols + ['Sector', 'Technology']
     all_year_cols = [c for c in raw_df.columns if c not in id_cols]
     year_cols = []
     for col in all_year_cols:
@@ -140,7 +149,7 @@ def process_melted_data_for_lookup(raw_df: pd.DataFrame) -> pd.DataFrame:
     print("   🔄 Melting data to long format...")
     melted = pd.melt(
         raw_df,
-        id_vars=id_cols + ['Sector', 'Technology'],  # Include mapped columns
+        id_vars=id_cols,
         value_vars=year_cols,
         var_name="Year",
         value_name="Value"
@@ -159,6 +168,14 @@ def process_melted_data_for_lookup(raw_df: pd.DataFrame) -> pd.DataFrame:
     melted = melted[melted["Value"].notna()].copy()
     print(f"   After removing nulls: {len(melted):,} rows")
     
+    # Set lifetime values of 0 to NA BEFORE taking medians (like original pipeline)
+    # Use exact matching instead of str.contains for speed
+    lifetime_mask = melted['Variable'] == 'Lifetime'
+    zero_lifetime_mask = lifetime_mask & (melted['Value'] == 0)
+    if zero_lifetime_mask.any():
+        melted.loc[zero_lifetime_mask, 'Value'] = pd.NA
+        print(f"   Set {zero_lifetime_mask.sum():,} zero lifetime values to NA before median calculation")
+    
     # Add geography mapping (ISO2)
     print("   🗺️  Adding geography mapping...")
     melted = add_geography_mapping(melted)
@@ -171,9 +188,15 @@ def process_melted_data_for_lookup(raw_df: pd.DataFrame) -> pd.DataFrame:
     print("   ⏰ Interpolating to complete yearly data (2023-2050)...")
     melted_interpolated = interpolate_to_yearly_data(melted)
     
+    # Clear original melted data to free memory
+    del melted
+    
     # Expand geographies to individual ISO2 codes
     print("   🌍 Expanding to individual countries...")
     melted_expanded = expand_to_iso2_codes(melted_interpolated)
+    
+    # Clear interpolated data to free memory
+    del melted_interpolated
     
     return melted_expanded
 
@@ -217,8 +240,8 @@ def add_geography_mapping(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def interpolate_to_yearly_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Interpolate data to have complete yearly coverage from 2023-2050"""
-    print("      Creating complete yearly time series...")
+    """Interpolate data to have complete yearly coverage from 2023-2050 - VECTORIZED"""
+    print("      Creating complete yearly time series (vectorized approach)...")
     
     # Define target years (2023-2050 inclusive)
     target_years = list(range(2023, 2051))
@@ -226,73 +249,44 @@ def interpolate_to_yearly_data(df: pd.DataFrame) -> pd.DataFrame:
     # Group by everything except Year and Value to create time series
     grouping_cols = ['Model', 'Scenario', 'Region', 'Variable', 'Unit', 'Sector', 'Technology', 'country_iso2_list', 'stringency']
     
-    interpolated_groups = []
-    total_groups = 0
-    processed_groups = 0
+    print(f"      Processing {df.groupby(grouping_cols).ngroups} time series with vectorized interpolation...")
     
-    print(f"      Interpolating {df.groupby(grouping_cols).ngroups} time series...")
+    # Create a complete template with all years for each group
+    unique_groups = df[grouping_cols].drop_duplicates()
     
-    for group_key, group_df in df.groupby(grouping_cols, dropna=False):
-        total_groups += 1
-        
-        if total_groups % 10000 == 0:
-            print(f"      Progress: {total_groups:,} groups processed")
-        
-        if group_df.empty:
-            continue
-            
-        # Get available years and values
-        year_value_pairs = group_df[['Year', 'Value']].dropna()
-        if len(year_value_pairs) < 2:
-            # Need at least 2 points for interpolation, skip this group
-            continue
-            
-        available_years = year_value_pairs['Year'].values
-        available_values = year_value_pairs['Value'].values
-        
-        # Create complete year range for this group
-        complete_years_df = pd.DataFrame({'Year': target_years})
-        
-        # Add group metadata
-        if isinstance(group_key, tuple):
-            for i, col in enumerate(grouping_cols):
-                complete_years_df[col] = group_key[i]
-        else:
-            complete_years_df[grouping_cols[0]] = group_key
-        
-        # Interpolate values using pandas
-        complete_years_df = complete_years_df.set_index('Year')
-        
-        # Create a series with available data
-        value_series = pd.Series(available_values, index=available_years)
-        
-        # Reindex to complete years and interpolate
-        interpolated_series = value_series.reindex(target_years)
-        interpolated_series = interpolated_series.interpolate(method='linear')
-        
-        # Forward fill and backward fill for edge extrapolation
-        interpolated_series = interpolated_series.bfill().ffill()
-        
-        # Add interpolated values back to dataframe
-        complete_years_df['Value'] = interpolated_series.values
-        complete_years_df = complete_years_df.reset_index()
-        
-        # Only keep rows where we successfully interpolated
-        complete_years_df = complete_years_df.dropna(subset=['Value'])
-        
-        if not complete_years_df.empty:
-            interpolated_groups.append(complete_years_df)
-            processed_groups += 1
+    # Create cartesian product of groups × years
+    years_df = pd.DataFrame({'Year': target_years})
+    complete_template = unique_groups.assign(key=1).merge(years_df.assign(key=1), on='key').drop('key', axis=1)
     
-    if not interpolated_groups:
-        print("      ⚠️  No groups could be interpolated!")
-        return df
+    print(f"      Created template with {len(complete_template):,} group-year combinations")
     
-    # Combine all interpolated groups
-    result = pd.concat(interpolated_groups, ignore_index=True)
+    # Merge with original data
+    merged = complete_template.merge(df, on=grouping_cols + ['Year'], how='left')
     
-    print(f"      ✅ Interpolated {processed_groups:,} time series")
-    print(f"      📈 Expanded from {len(df):,} to {len(result):,} yearly data points")
+    # Interpolate within each group using transform (vectorized)
+    print("      Applying vectorized interpolation...")
+    
+    def interpolate_group(group):
+        """Vectorized interpolation for a single group"""
+        # Sort by year
+        group = group.sort_values('Year')
+        
+        # Interpolate linearly
+        group['Value'] = group['Value'].interpolate(method='linear')
+        
+        # Forward and backward fill for extrapolation
+        group['Value'] = group['Value'].bfill().ffill()
+        
+        return group
+    
+    # Apply interpolation to each group (still uses groupby but with vectorized operations)
+    interpolated = merged.groupby(grouping_cols, group_keys=False).apply(interpolate_group)
+    
+    # Remove rows where interpolation failed (still NaN)
+    result = interpolated.dropna(subset=['Value'])
+    
+    print(f"      ✅ Vectorized interpolation complete")
+    print(f"      📈 Result: {len(result):,} yearly data points")
     
     return result
 
@@ -308,43 +302,46 @@ def add_scenario_categorization(df: pd.DataFrame) -> pd.DataFrame:
         if set(["Model", "Scenario", "Category"]).issubset(meta_df.columns):
             meta_df = meta_df[["Model", "Scenario", "Category"]].dropna()
             df = df.merge(meta_df, on=["Model", "Scenario"], how="left")
-            df["stringency"] = df["Category"].fillna("C8")  # Default to least stringent
+            df["stringency"] = df["Category"].fillna("UNKNOWN")  # Mark as unknown instead of C8
+            
+            # Show stringency distribution
+            stringency_counts = df["stringency"].value_counts()
+            print(f"      Stringency distribution: {stringency_counts.to_dict()}")
         else:
-            df["stringency"] = "C8"  # Default
+            df["stringency"] = "UNKNOWN"  # Mark as unknown
     except FileNotFoundError:
-        df["stringency"] = "C8"  # Default
+        print("      Metadata file not found, marking all scenarios as UNKNOWN stringency")
+        df["stringency"] = "UNKNOWN"  # Mark as unknown instead of C8
     
     return df
 
 
 def expand_to_iso2_codes(df: pd.DataFrame) -> pd.DataFrame:
-    """Expand regional data to individual ISO2 codes"""
-    print("      Expanding regional data to individual countries...")
+    """Expand regional data to individual ISO2 codes - PURE VECTORIZED"""
+    print("      Expanding regional data to individual countries (vectorized)...")
     
-    expanded_rows = []
-    progress_count = 0
-    total_rows = len(df)
+    # Use pandas explode for vectorized expansion
+    df_copy = df.copy()
     
-    for idx, row in df.iterrows():
-        progress_count += 1
-        if progress_count % 100000 == 0:
-            print(f"      Progress: {progress_count:,}/{total_rows:,} ({progress_count/total_rows*100:.1f}%)")
-            
-        iso2_list_str = str(row['country_iso2_list'])
-        if iso2_list_str and iso2_list_str != 'nan' and iso2_list_str.strip():
-            iso2_codes = [code.strip() for code in iso2_list_str.split(',') if code.strip()]
-            for iso2 in iso2_codes:
-                new_row = row.copy()
-                new_row['iso2'] = iso2
-                expanded_rows.append(new_row)
-        else:
-            # Keep rows without ISO2 but mark them
-            new_row = row.copy()
-            new_row['iso2'] = 'UNKNOWN'
-            expanded_rows.append(new_row)
+    # Convert country_iso2_list to lists (vectorized)
+    df_copy['iso2_list'] = df_copy['country_iso2_list'].fillna('').astype(str).str.split(',')
     
-    expanded_df = pd.DataFrame(expanded_rows)
-    print(f"      Expanded to {len(expanded_df):,} rows with individual ISO2 codes")
+    # Clean up empty strings and whitespace (vectorized)
+    df_copy['iso2_list'] = df_copy['iso2_list'].apply(lambda x: [code.strip() for code in x if code.strip()] or ['GLOBAL'])
+    
+    # Limit to reasonable number of countries per region (vectorized)
+    df_copy['iso2_list'] = df_copy['iso2_list'].apply(lambda x: x[:20] if len(x) <= 20 else [x[0]])
+    
+    # Explode to create one row per ISO2 code (pure pandas operation)
+    expanded_df = df_copy.explode('iso2_list').reset_index(drop=True)
+    
+    # Rename the exploded column
+    expanded_df = expanded_df.rename(columns={'iso2_list': 'iso2'})
+    
+    # Drop the original country_iso2_list column
+    expanded_df = expanded_df.drop(columns=['country_iso2_list'])
+    
+    print(f"      ✅ Expanded to {len(expanded_df):,} rows with individual ISO2 codes")
     
     return expanded_df
 
@@ -353,31 +350,172 @@ def create_lookup_from_melted(melted_df: pd.DataFrame) -> pd.DataFrame:
     """Create lookup table directly from melted data using fast groupby operations"""
     print("📊 Creating lookup table from melted data...")
     
-    # Map variable names to our target metrics (simplified)
+    # Map EXACT variable names to our target metrics (no substring matching!)
     variable_metric_map = {
-        'Capital Cost': 'capital_cost',
-        'OM Cost': 'om_cost', 
-        'Efficiency': 'efficiency',
-        'Lifetime': 'lifetime'
+        # Technology characteristics
+        'Capital Cost': 'capital_cost_usd_per_kw',      # Raw data is USD2010/kW → convert to MW
+        'OM Cost': 'om_cost_usd_per_kw_per_yr',         # Raw data is USD2010/kW/yr → convert to MW  
+        'Efficiency': 'efficiency_decimal',             # Raw data sometimes as % → convert to decimal
+        'Lifetime': 'lifetime_years',                   # Raw data in years
+        # Energy prices (EXACT variable names from AR6 database)
+        'Price|Primary Energy|Coal': 'coal_price_usd_per_gj',
+        'Price|Primary Energy|Gas': 'gas_price_usd_per_gj',
+        'Price|Primary Energy|Oil': 'oil_price_usd_per_gj', 
+        'Price|Primary Energy|Biomass': 'biomass_price_usd_per_gj',
+        'Price|Secondary Energy|Electricity': 'electricity_price_usd_per_gj'
     }
     
-    # Extract metric type from Variable column
-    melted_df['metric_type'] = 'unknown'
-    for var_pattern, metric in variable_metric_map.items():
-        mask = melted_df['Variable'].str.contains(var_pattern, case=False, na=False)
-        melted_df.loc[mask, 'metric_type'] = metric
+    # Check units for consistency before processing (using exact matching)
+    print("   📏 Checking unit consistency...")
+    for exact_var, metric_name in variable_metric_map.items():
+        metric_data = melted_df[melted_df['Variable'] == exact_var]  # EXACT match only
+        if not metric_data.empty:
+            unique_units = metric_data['Unit'].unique()
+            print(f"     {exact_var}: {len(unique_units)} unique units - {list(unique_units[:5])}")
     
-    # Filter to known metrics only
-    known_metrics = melted_df[melted_df['metric_type'] != 'unknown'].copy()
-    print(f"   Found {len(known_metrics):,} rows with target metrics")
+    # Separate technology-specific data from price data (using exact matching)
+    tech_variables = ['Capital Cost', 'OM Cost', 'Efficiency', 'Lifetime']
+    price_variables = ['Price|Primary Energy|Coal', 'Price|Primary Energy|Gas', 'Price|Primary Energy|Oil', 
+                      'Price|Primary Energy|Biomass', 'Price|Secondary Energy|Electricity']
     
-    # Group by technology, year, iso2, stringency, and metric type, then take median
-    print("   🔢 Computing medians by grouping dimensions...")
-    lookup_data = known_metrics.groupby([
-        'Technology', 'Year', 'iso2', 'stringency', 'metric_type'
-    ])['Value'].median().reset_index()
+    tech_data = melted_df[melted_df['Variable'].str.contains('|'.join(tech_variables), case=False, na=False)].copy()
+    price_data = melted_df[melted_df['Variable'].isin(price_variables)].copy()  # Exact matching for prices
     
-    print(f"   Created {len(lookup_data):,} lookup entries")
+    print(f"   Technology data: {len(tech_data):,} rows")
+    print(f"   Price data: {len(price_data):,} rows")
+    
+    # Process technology-specific data
+    tech_lookup_data = []
+    if not tech_data.empty:
+        # Extract metric type from Variable column for technology data (using exact matching)
+        tech_data['metric_type'] = 'unknown'
+        for exact_var, metric in variable_metric_map.items():
+            if 'Price' not in exact_var:  # Skip price patterns
+                mask = tech_data['Variable'].str.contains(exact_var, case=False, na=False)
+                tech_data.loc[mask, 'metric_type'] = metric
+        
+        # Filter to known metrics only
+        known_tech_metrics = tech_data[tech_data['metric_type'] != 'unknown'].copy()
+        print(f"   Technology metrics: {len(known_tech_metrics):,} rows")
+        
+        if not known_tech_metrics.empty:
+            # Group by technology, year, iso2, stringency, and metric type, then take median
+            tech_lookup_data = known_tech_metrics.groupby([
+                'Technology', 'Year', 'iso2', 'stringency', 'metric_type'
+            ])['Value'].median().reset_index()
+            print(f"   Created {len(tech_lookup_data):,} technology lookup entries")
+    
+    # Process price data (map to technologies based on fuel type)
+    price_lookup_data = []
+    if not price_data.empty:
+        # Extract price type from Variable column (using exact matching)
+        price_data['metric_type'] = 'unknown'
+        for exact_var, metric in variable_metric_map.items():
+            if 'Price' in exact_var:  # Only price patterns
+                mask = price_data['Variable'] == exact_var  # Exact match for price variables
+                price_data.loc[mask, 'metric_type'] = metric
+        
+        # Filter to known price metrics only
+        known_price_metrics = price_data[price_data['metric_type'] != 'unknown'].copy()
+        print(f"   Price metrics: {len(known_price_metrics):,} rows")
+        
+        if not known_price_metrics.empty:
+            # VECTORIZED price mapping to ALL relevant technologies
+            
+            # Define technology-to-fuel mapping ONLY for technologies that exist in AR6 data
+            tech_fuel_map = {
+                # Coal technologies → coal fuel price (only dash format exists in AR6)
+                'CoalCap': 'Coal', 'CoalCap - w/ CCS': 'Coal', 'CoalCap - w/o CCS': 'Coal',
+                
+                # Gas technologies → gas fuel price (only dash format exists in AR6)
+                'GasCap': 'Gas', 'GasCap - w/ CCS': 'Gas', 'GasCap - w/o CCS': 'Gas',
+                
+                # Oil technologies → oil fuel price (only dash format exists in AR6)
+                'OilCap': 'Oil', 'OilCap - w/ CCS': 'Oil', 'OilCap - w/o CCS': 'Oil',
+                
+                # Biomass technologies → biomass fuel price (only dash format exists in AR6)
+                'BiomassCap': 'Biomass', 'BiomassCap - w/ CCS': 'Biomass', 'BiomassCap - w/o CCS': 'Biomass',
+                
+                # Simple fuel names for price mapping (these get fuel prices but no cost data)
+                'Coal': 'Coal', 'Gas': 'Gas', 'Oil': 'Oil', 'Biomass': 'Biomass'
+            }
+            
+            # Get all technologies that should receive price mappings
+            existing_techs = list(tech_fuel_map.keys())  # All technologies defined in our mapping
+            
+            price_lookup_data = []
+            
+            # VECTORIZED fuel price expansion
+            fuel_price_mapping = {
+                'coal_price_usd_per_gj': 'Coal',
+                'gas_price_usd_per_gj': 'Gas',
+                'oil_price_usd_per_gj': 'Oil', 
+                'biomass_price_usd_per_gj': 'Biomass'
+            }
+            
+            for price_metric, fuel_name in fuel_price_mapping.items():
+                # Get price data for this fuel
+                fuel_mask = known_price_metrics['metric_type'] == price_metric
+                if fuel_mask.any():
+                    base_fuel_data = known_price_metrics[fuel_mask].copy()
+                    
+                    # Find all technologies that use this fuel
+                    relevant_techs = [tech for tech, fuel in tech_fuel_map.items() if fuel == fuel_name]
+                    
+                    if relevant_techs:
+                        # VECTORIZED expansion: create cartesian product of price data × relevant technologies
+                        tech_df = pd.DataFrame({'Technology': relevant_techs})
+                        tech_df['key'] = 1
+                        base_fuel_data['key'] = 1
+                        
+                        # Merge to create all combinations (vectorized)
+                        expanded_fuel_data = base_fuel_data.merge(tech_df, on='key', suffixes=('', '_new')).drop('key', axis=1)
+                        expanded_fuel_data['Technology'] = expanded_fuel_data['Technology_new']
+                        expanded_fuel_data = expanded_fuel_data.drop('Technology_new', axis=1)
+                        expanded_fuel_data['metric_type'] = 'fuel_price_usd_per_gj'
+                        expanded_fuel_data['fuel_for_price'] = fuel_name
+                        
+                        price_lookup_data.append(expanded_fuel_data)
+                        print(f"   Mapped {fuel_name} price to {len(relevant_techs)} technologies: {len(expanded_fuel_data):,} entries")
+            
+            # VECTORIZED electricity price expansion (to ALL technologies in tech_fuel_map)
+            elec_mask = known_price_metrics['metric_type'] == 'electricity_price_usd_per_gj'
+            if elec_mask.any():
+                base_elec_data = known_price_metrics[elec_mask].copy()
+                
+                # Get ALL technologies that could use electricity price
+                all_relevant_techs = list(tech_fuel_map.keys())
+                
+                if all_relevant_techs:
+                    # VECTORIZED expansion: electricity price for ALL technologies
+                    tech_df = pd.DataFrame({'Technology': all_relevant_techs})
+                    tech_df['key'] = 1
+                    base_elec_data['key'] = 1
+                    
+                    # Merge to create all combinations (vectorized)
+                    expanded_elec_data = base_elec_data.merge(tech_df, on='key', suffixes=('', '_new')).drop('key', axis=1)
+                    expanded_elec_data['Technology'] = expanded_elec_data['Technology_new']
+                    expanded_elec_data = expanded_elec_data.drop('Technology_new', axis=1)
+                    expanded_elec_data['metric_type'] = 'electricity_price_usd_per_gj'
+                    
+                    price_lookup_data.append(expanded_elec_data)
+                    print(f"   Mapped electricity price to ALL {len(all_relevant_techs)} technologies: {len(expanded_elec_data):,} entries")
+            
+            if price_lookup_data:
+                price_lookup_data = pd.concat(price_lookup_data, ignore_index=True)
+                print(f"   Combined {len(price_lookup_data):,} total price entries")
+    
+    # Combine technology and price data
+    if len(tech_lookup_data) > 0 and len(price_lookup_data) > 0:
+        lookup_data = pd.concat([tech_lookup_data, price_lookup_data], ignore_index=True)
+    elif len(tech_lookup_data) > 0:
+        lookup_data = tech_lookup_data
+    elif len(price_lookup_data) > 0:
+        lookup_data = price_lookup_data
+    else:
+        lookup_data = pd.DataFrame()
+    
+    print(f"   Combined lookup entries: {len(lookup_data):,}")
     
     # Pivot metric types to columns
     print("   🔄 Pivoting metrics to columns...")
@@ -396,9 +534,119 @@ def create_lookup_from_melted(melted_df: pd.DataFrame) -> pd.DataFrame:
     }
     lookup_pivoted = lookup_pivoted.rename(columns=column_renames)
     
+    # CRITICAL: Apply unit conversions to match pipeline expectations
+    print("   🔄 Applying unit conversions...")
+    
+    # Convert kW units to MW units (×1000)
+    if 'capital_cost_usd_per_kw' in lookup_pivoted.columns:
+        lookup_pivoted['capital_cost_usd_per_mw'] = lookup_pivoted['capital_cost_usd_per_kw'] * 1000
+        lookup_pivoted = lookup_pivoted.drop(columns=['capital_cost_usd_per_kw'])
+        print("     ✅ Converted capital_cost: USD/kW → USD/MW (×1000)")
+        
+    if 'om_cost_usd_per_kw_per_yr' in lookup_pivoted.columns:
+        lookup_pivoted['om_cost_usd_per_mw_per_yr'] = lookup_pivoted['om_cost_usd_per_kw_per_yr'] * 1000  
+        lookup_pivoted = lookup_pivoted.drop(columns=['om_cost_usd_per_kw_per_yr'])
+        print("     ✅ Converted om_cost: USD/kW/yr → USD/MW/yr (×1000)")
+    
+    # Convert efficiency percentages to decimals (÷100 if >1)
+    if 'efficiency_decimal' in lookup_pivoted.columns:
+        # Apply the same conversion as the main pipeline: divide by 100 if > 1
+        over_one_mask = lookup_pivoted['efficiency_decimal'] > 1
+        if over_one_mask.any():
+            lookup_pivoted.loc[over_one_mask, 'efficiency_decimal'] = lookup_pivoted.loc[over_one_mask, 'efficiency_decimal'] / 100
+            print(f"     ✅ Converted {over_one_mask.sum():,} efficiency values from percentage to decimal (÷100)")
+        print("     ✅ Efficiency values are now in decimal format")
+    
+    # Note: Zero lifetime values already set to NA before median calculation
+    
+    # Convert price units from GJ to MWh (×3.6 like main pipeline)
+    price_conversions = {
+        'fuel_price_usd_per_gj': 'fuel_price_usd_per_mwh',
+        'electricity_price_usd_per_gj': 'electricity_price_usd_per_mwh'
+    }
+    
+    for old_col, new_col in price_conversions.items():
+        if old_col in lookup_pivoted.columns:
+            # Convert from USD/GJ to USD/MWh (×3.6)
+            lookup_pivoted[new_col] = lookup_pivoted[old_col] * 3.6
+            lookup_pivoted = lookup_pivoted.drop(columns=[old_col])
+            print(f"     ✅ Converted {old_col} to {new_col} (×3.6)")
+    
+    if any(col in lookup_pivoted.columns for col in price_conversions.values()):
+        print("     ✅ All price units converted from GJ to MWh")
+    
     print(f"✅ Final lookup table: {len(lookup_pivoted):,} rows × {len(lookup_pivoted.columns)} columns")
     
-    return lookup_pivoted
+    # Create UNKNOWN stringency fallback rows (average of all known stringencies)
+    print("   📊 Creating UNKNOWN stringency fallback entries...")
+    
+    known_stringencies = ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8']
+    fallback_data = []
+    
+    # Get unique combinations of technology, year, iso2
+    unique_combos = lookup_pivoted[['technology', 'year', 'iso2']].drop_duplicates()
+    
+    # VECTORIZED fallback creation - no iterrows!
+    # Filter to known stringencies and group by tech, year, iso2 to calculate means
+    metric_cols = [col for col in lookup_pivoted.columns 
+                  if col not in ['technology', 'year', 'iso2', 'stringency']]
+    
+    if metric_cols:
+        # Filter to known stringencies
+        known_data = lookup_pivoted[lookup_pivoted['stringency'].isin(known_stringencies)]
+        
+        if not known_data.empty:
+            # Group and calculate means across stringencies (fully vectorized)
+            fallback_df = known_data.groupby(['technology', 'year', 'iso2'])[metric_cols].mean().reset_index()
+            fallback_df['stringency'] = 'UNKNOWN'
+            
+            # Reorder columns to match original format
+            col_order = ['technology', 'year', 'iso2', 'stringency'] + metric_cols
+            fallback_df = fallback_df[col_order]
+            
+            fallback_data = fallback_df.to_dict('records')
+    
+    if fallback_data:
+        fallback_df = pd.DataFrame(fallback_data)
+        final_lookup = pd.concat([lookup_pivoted, fallback_df], ignore_index=True)
+        print(f"   Added {len(fallback_df):,} UNKNOWN stringency fallback entries")
+    else:
+        final_lookup = lookup_pivoted
+        print("   No fallback entries needed")
+    
+    # Add Global geography fallbacks for missing values
+    print("   🌍 Creating Global geography fallback entries...")
+    global_fallback_data = []
+    
+    # Get unique combinations of technology, year, stringency
+    unique_combos = final_lookup[['technology', 'year', 'stringency']].drop_duplicates()
+    
+    # VECTORIZED Global geography fallback creation - no iterrows!
+    # Group by technology, year, stringency and calculate means across all geographies
+    metric_cols = [col for col in final_lookup.columns 
+                  if col not in ['technology', 'year', 'iso2', 'stringency']]
+    
+    if metric_cols:
+        # Group and calculate means across geographies (fully vectorized)
+        global_fallback_df = final_lookup.groupby(['technology', 'year', 'stringency'])[metric_cols].mean().reset_index()
+        global_fallback_df['iso2'] = 'GLOBAL'
+        
+        # Reorder columns to match original format
+        col_order = ['technology', 'year', 'iso2', 'stringency'] + metric_cols
+        global_fallback_df = global_fallback_df[col_order]
+        
+        global_fallback_data = global_fallback_df.to_dict('records')
+    
+    if global_fallback_data:
+        global_fallback_df = pd.DataFrame(global_fallback_data)
+        final_lookup = pd.concat([final_lookup, global_fallback_df], ignore_index=True)
+        print(f"   Added {len(global_fallback_df):,} Global geography fallback entries")
+    else:
+        print("   No global fallback entries needed")
+    
+    print(f"✅ Final lookup table with all fallbacks: {len(final_lookup):,} rows × {len(final_lookup.columns)} columns")
+    
+    return final_lookup
 
 def main():
     print("=" * 80)
@@ -431,7 +679,14 @@ def main():
     
     # Summary statistics
     print("\n📊 Summary:")
-    value_cols = ['capital_cost', 'om_cost', 'efficiency', 'lifetime']
+    value_cols = [
+        'capital_cost_usd_per_mw', 'om_cost_usd_per_mw_per_yr', 'efficiency_decimal', 'lifetime_years',
+        'fuel_price_usd_per_mwh', 'electricity_price_usd_per_mwh'
+    ]
+    
+    # Also check fuel_for_price column
+    if 'fuel_for_price' in lookup_table.columns:
+        print(f"   fuel_for_price values: {lookup_table['fuel_for_price'].value_counts().to_dict()}")
     for col in value_cols:
         if col in lookup_table.columns:
             filled = lookup_table[col].notna().sum()
