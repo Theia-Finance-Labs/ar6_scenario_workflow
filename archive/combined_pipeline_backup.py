@@ -29,7 +29,7 @@ import sys
 from typing import Dict, List, Tuple, Optional
 
 # Import external step 4 module
-from step4_gapfill_simple import step4_gapfill_only
+from step4_aggregate_and_gapfill import step4_aggregate_and_gapfill
 
 # Use regular pandas for better compatibility with complex operations
 import pandas as pd
@@ -2302,7 +2302,555 @@ def main() -> None:
     # Step 3
     step3_finalize_target_schema()
     # Step 4
-    step4_gapfill_only()
+    step4_aggregate_and_gapfill()
+    print_banner("AR6 Combined Pipeline — Done")
+
+
+if __name__ == "__main__":
+    main()
+        "om_cost_usd_per_mw_per_yr",
+        "capital_cost_usd_per_mw",
+        "carbon_price_usd_per_tco2",
+    ]
+
+    for col in numeric_cols:
+        if col in df.columns:
+            try:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+                non_null = df[col].notna().sum()
+                print(f"   {col}: converted to numeric, {non_null:,} non-null values")
+            except Exception as e:
+                print(f"   WARNING: Failed to convert {col} to numeric: {e}")
+
+    # String columns that should be consistent
+    string_cols = [
+        "scenario_provider",
+        "scenario",
+        "scenario_type",
+        "scenario_geography",
+        "sector",
+        "technology",
+        "technology_type",
+        "price_unit",
+        "fuel_for_price",
+        "pathway_unit",
+        "country_iso2_list",
+    ]
+
+    for col in string_cols:
+        if col in df.columns:
+            df[col] = df[col].astype(str)
+
+    # Year should be integer
+    if "scenario_year" in df.columns:
+        df["scenario_year"] = pd.to_numeric(
+            df["scenario_year"], errors="coerce"
+        ).astype("Int64")
+
+    print(f"Data types fixed. Shape: {df.shape}")
+
+    # ===== OILCAP COST HEURISTIC =====
+    # Apply OilCap cost heuristic: use average of GasCap and CoalCap costs
+    # print("🛢️ Applying OilCap cost heuristic (average of GasCap and CoalCap)...")
+
+    # oilcap_mask = df["technology"].str.contains("OilCap", na=False)
+    # oilcap_rows = oilcap_mask.sum()
+    # print(f"   Found {oilcap_rows:,} OilCap rows")
+
+    # if oilcap_rows > 0:
+    #     # Group by scenario dimensions for cost averaging
+    #     cost_grouping_cols = [
+    #         "scenario_provider",
+    #         "scenario",
+    #         "scenario_geography",
+    #         "scenario_year",
+    #         "sector",
+    #     ]
+    #     cost_cols = ["capital_cost_usd_per_mw", "om_cost_usd_per_mw_per_yr"]
+
+    #     filled_counts = {"capital_cost": 0, "om_cost": 0}
+
+    #     for cost_col in cost_cols:
+    #         if cost_col not in df.columns:
+    #             continue
+
+    #         # Find OilCap rows missing this cost
+    #         missing_cost_mask = oilcap_mask & df[cost_col].isna()
+    #         missing_count = missing_cost_mask.sum()
+
+    #         if missing_count > 0:
+    #             print(
+    #                 f"   Filling {missing_count:,} missing {cost_col} values for OilCap..."
+    #             )
+
+    #             # For each missing OilCap row, find GasCap and CoalCap costs in same scenario/geography/year
+    #             for idx in df.index[missing_cost_mask]:
+    #                 scenario_data = df.loc[idx, cost_grouping_cols].to_dict()
+
+    #                 # Find GasCap and CoalCap costs for same scenario/geography/year
+    #                 base_mask = True
+    #                 for col, val in scenario_data.items():
+    #                     if col in df.columns:
+    #                         base_mask = base_mask & (df[col] == val)
+
+    #                 gas_mask = base_mask & df["technology"].str.contains(
+    #                     "GasCap", na=False
+    #                 )
+    #                 coal_mask = base_mask & df["technology"].str.contains(
+    #                     "CoalCap", na=False
+    #                 )
+
+    #                 gas_costs = df.loc[gas_mask & df[cost_col].notna(), cost_col]
+    #                 coal_costs = df.loc[coal_mask & df[cost_col].notna(), cost_col]
+
+    #                 # Calculate average if both are available
+    #                 costs_to_average = []
+    #                 if not gas_costs.empty:
+    #                     costs_to_average.append(gas_costs.mean())
+    #                 if not coal_costs.empty:
+    #                     costs_to_average.append(coal_costs.mean())
+
+    #                 if costs_to_average:
+    #                     avg_cost = sum(costs_to_average) / len(costs_to_average)
+    #                     df.loc[idx, cost_col] = avg_cost
+    #                     filled_counts[cost_col.split("_")[0]] += 1
+
+    #     print(
+    #         f"   OilCap heuristic filled: {filled_counts['capital']} capital costs, {filled_counts['om']} OM costs"
+    #     )
+
+    # ===== TECHNOLOGY MAPPING DISABLED =====
+    # Skip technology mapping to keep all technologies separate
+    # This prevents artificial aggregation of different technology variants
+    print("🚫 Technology mapping DISABLED - keeping all technologies separate")
+    df_map = df.copy()  # Use original data without any technology mapping
+
+    # # Vectorized mapping from mapping file (first pass)
+    # df_map = vectorized_mapping(df, mapping_df)
+    # df_map["sector"] = df_map["target_sector"]
+    # df_map["technology"] = df_map["target_technology"]
+
+    # # Enforce canonical final targets
+    # FINAL_TARGETS: set[tuple[str, str]] = {
+    #     ("Coal", "Coal"),
+    #     ("Oil&Gas", "Oil"),
+    #     ("Oil&Gas", "Gas"),
+    #     ("Power", "SolarCap"),
+    #     ("Power", "CoalCap"),
+    #     ("Power", "GasCap"),
+    #     ("Power", "OilCap"),
+    #     ("Power", "BiomassCap"),
+    #     ("Power", "WindCap"),
+    #     ("Power", "HydroCap"),
+    #     ("Power", "NuclearCap"),
+    #     ("Power", "GeothermalCap"),
+    #     ("Steel", "BF-BOF"),
+    #     ("Steel", "DRI-BOF"),
+    #     ("Steel", "EAF"),
+    # }
+
+    # def canonicalize_to_final_targets(df_in: pd.DataFrame) -> pd.DataFrame:
+    #     dfc = df_in.copy()
+    #     sec = dfc["sector"].astype(str).str.lower()
+    #     tech = dfc["technology"].astype(str).str.lower()
+
+    #     # Start with identity
+    #     sec_out = dfc["sector"].astype(str).copy()
+    #     tech_out = dfc["technology"].astype(str).copy()
+
+    #     # Normalize sector names first
+    #     sec_out = sec_out.mask(sec.isin(["gas&oil", "oil&gas"]), "Oil&Gas")
+
+    #     # Coal sector → (Coal, Coal)
+    #     coal_mask = sec.eq("coal")
+    #     sec_out = sec_out.mask(coal_mask, "Coal")
+    #     tech_out = tech_out.mask(coal_mask, "Coal")
+
+    #     # Oil&Gas sector → tech either Oil or Gas
+    #     og_mask = sec.isin(["oil&gas", "gas&oil"]) | sec_out.eq("Oil&Gas")
+    #     gas_mask = og_mask & (tech.str.contains("gas"))
+    #     oil_mask = og_mask & (tech.str.contains("oil"))
+    #     sec_out = sec_out.mask(og_mask, "Oil&Gas")
+    #     tech_out = tech_out.mask(gas_mask, "Gas")
+    #     tech_out = tech_out.mask(oil_mask, "Oil")
+
+    #     # Power-like sectors (Power, Renewables, Nuclear → Power)
+    #     power_like = sec.isin(["power", "renewables", "nuclear"]) | sec_out.isin(["Power", "Renewables", "Nuclear"])
+    #     sec_out = sec_out.mask(power_like, "Power")
+
+    #     # Map power technologies to Cap variants
+    #     def map_power_tech(name: str) -> str:
+    #         n = name.lower()
+    #         if any(k in n for k in ["solar", "pv", "csp"]):
+    #             return "SolarCap"
+    #         if "wind" in n:
+    #             return "WindCap"
+    #         if "hydro" in n:
+    #             return "HydroCap"
+    #         if "nuclear" in n:
+    #             return "NuclearCap"
+    #         if "geothermal" in n:
+    #             return "GeothermalCap"
+    #         if any(k in n for k in ["biomass", "bio"]):
+    #             return "BiomassCap"
+    #         if "coal" in n:
+    #             return "CoalCap"
+    #         if "gas" in n:
+    #             return "GasCap"
+    #         if "oil" in n:
+    #             return "OilCap"
+    #         return name
+
+    #     power_idx = power_like[power_like].index
+    #     tech_out.loc[power_idx] = tech_out.loc[power_idx].apply(map_power_tech)
+
+    #     # Steel mapping to 3 categories
+    #     steel_mask = sec.eq("steel") | sec_out.eq("Steel")
+    #     def map_steel_tech(name: str) -> str:
+    #         n = name.lower()
+    #         if "dri" in n:
+    #             return "DRI-BOF"
+    #         if "eaf" in n:
+    #             return "EAF"
+    #         # default steel route
+    #         return "BF-BOF"
+
+    #     steel_idx = steel_mask[steel_mask].index
+    #     sec_out = sec_out.mask(steel_mask, "Steel")
+    #     tech_out.loc[steel_idx] = tech_out.loc[steel_idx].apply(map_steel_tech)
+
+    #     # Apply canonical
+    #     dfc["sector"] = sec_out
+    #     dfc["technology"] = tech_out
+
+    #     # Filter to final allowed set
+    #     pair = list(zip(dfc["sector"], dfc["technology"]))
+    #     keep = [p in FINAL_TARGETS for p in pair]
+    #     return dfc.loc[keep].copy()
+
+    # before_rows = len(df_map)
+    # df_map = canonicalize_to_final_targets(df_map)
+    # after_rows = len(df_map)
+    # print(f"Canonical targets: kept {after_rows:,}/{before_rows:,} rows")
+
+    print(f"Keeping all original technologies: {len(df_map):,} rows")
+
+    # Grouping keys
+    grouping_cols = [
+        c
+        for c in [
+            "scenario_provider",
+            "scenario",
+            "scenario_type",
+            "scenario_geography",
+            "sector",
+            "technology",
+            "scenario_year",
+        ]
+        if c in df_map.columns
+    ]
+
+    # Define aggregation spec: sums and weighted averages
+    sum_cols = [
+        c
+        for c in ["scenario_pathway", "capacity_additions_mw_per_yr"]
+        if c in df_map.columns
+    ]
+    avg_cols = [
+        c
+        for c in [
+            "scenario_price",
+            "fuel_price",
+            "scenario_capacity_factor",
+            "lifetime_years",
+            "efficiency_decimal",
+            "om_cost_usd_per_mw_per_yr",
+            "capital_cost_usd_per_mw",
+            "carbon_price_usd_per_tco2",
+        ]
+        if c in df_map.columns
+    ]
+
+    # Weighted average helper
+    def weighted_avg(group: pd.DataFrame, col: str, weight_col: str) -> float:
+        weights = group[weight_col].fillna(1.0)
+        vals = group[col]
+        denom = weights.sum()
+        if denom == 0 or vals.isna().all():
+            return vals.mean()
+        return (vals * weights).sum() / denom
+
+    # Aggregate with a single groupby apply to minimize Python overhead
+    def aggregate_group(group: pd.DataFrame) -> pd.Series:
+        out: Dict[str, float] = {}
+        # Sums
+        for col in sum_cols:
+            out[col] = group[col].sum()
+        # Weighted averages by scenario_pathway
+        for col in avg_cols:
+            out[col] = (
+                weighted_avg(
+                    group,
+                    col,
+                    "scenario_pathway" if "scenario_pathway" in group.columns else None,
+                )
+                if "scenario_pathway" in group.columns
+                else group[col].mean()
+            )
+        # Carry-forward non-agg columns (take first)
+        carry_cols = [
+            c
+            for c in group.columns
+            if c not in set(sum_cols + avg_cols)
+            and c not in ["target_sector", "target_technology", "aggregation_group"]
+        ]
+        carry_first = group[carry_cols].iloc[0]
+        for c in carry_cols:
+            out.setdefault(c, carry_first[c])
+        return pd.Series(out)
+
+    aggregated = df_map.groupby(grouping_cols, as_index=False).apply(aggregate_group)
+    # groupby.apply with as_index=False returns index columns too; ensure flat frame
+    if isinstance(aggregated.columns, pd.MultiIndex):
+        aggregated.columns = [
+            "_".join([str(c) for c in tup if c != ""]) for tup in aggregated.columns
+        ]
+
+    # Initialize gap-filled tracking column
+    if "gap_filled_columns" not in aggregated.columns:
+        aggregated["gap_filled_columns"] = ""
+    else:
+        # Ensure it's properly initialized as string
+        aggregated["gap_filled_columns"] = (
+            aggregated["gap_filled_columns"].fillna("").astype(str)
+        )
+
+    # Create stringency BEFORE gap-filling so it can be used in hierarchy
+    aggregated["stringency"] = aggregated.get("scenario_type", np.nan)
+
+    # Clean up zero values that should be treated as missing data
+    print("🧹 Cleaning zero values that should be treated as missing...")
+    zero_to_na_columns = ["lifetime_years", "efficiency_decimal"]
+
+    for col in zero_to_na_columns:
+        if col in aggregated.columns:
+            zero_count = (aggregated[col] == 0).sum()
+            if zero_count > 0:
+                print(f"   {col}: converting {zero_count:,} zero values to NA")
+                aggregated[col] = aggregated[col].replace(0, np.nan)
+            else:
+                print(f"   {col}: no zero values found")
+
+    # Define standard hierarchical gap-filling order for consistent logic
+    # This follows a systematic approach from most specific to most general
+    # Now includes Global geography fallbacks
+    standard_hierarchy = [
+        # [
+        #     "scenario_year",
+        #     "technology",
+        #     "scenario_geography",
+        #     "scenario_type",
+        #     "stringency",
+        # ],  # Most specific
+        # ["scenario_year", "technology", "scenario_type", "stringency"],  # Same policy
+        # [
+        #     "scenario_year",
+        #     "technology",
+        #     "scenario_geography",
+        #     "scenario_type",
+        # ],  # Same type, cross-stringency
+        # [
+        #     "scenario_year",
+        #     "technology",
+        #     "scenario_geography",
+        #     "stringency",
+        # ],  # Same stringency, cross-type
+        # ["scenario_year", "technology", "scenario_type"],  # Cross-geo/stringency
+        # ["scenario_year", "technology", "stringency"],  # Cross-geo/type
+        # ["scenario_year", "technology", "scenario_geography"],  # Cross-policy
+        # ["scenario_year", "technology"],  # Same tech only
+        # [
+        #     "technology",
+        #     "scenario_geography",
+        #     "scenario_type",
+        #     "stringency",
+        # ],  # Cross-time
+        # ["technology", "scenario_geography"],  # Cross-time/policy
+        ["technology"],  # Most general
+    ]
+
+    # Add Global geography-specific fallback levels for better gap-filling
+    # These levels specifically use Global geography as a fallback when regional data is missing
+    global_fallback_hierarchy = [
+        # [
+        #     "scenario_year",
+        #     "technology",
+        #     "scenario_type",
+        #     "stringency",
+        # ],  # Use Global for same policy
+        # ["scenario_year", "technology", "scenario_type"],  # Use Global for same type
+        # ["scenario_year", "technology", "stringency"],  # Use Global for same stringency
+        # ["scenario_year", "technology"],  # Use Global for same tech/year
+        # ["technology", "scenario_type", "stringency"],  # Use Global cross-time
+        # ["technology", "scenario_type"],  # Use Global cross-time/stringency
+        ["technology"],  # Use Global most general
+    ]
+
+    # Apply standard hierarchy to all gap-fillable columns for consistency
+    gap_spec: Dict[str, List[List[str]]] = {}
+
+    # Technology-specific columns use the full standard hierarchy
+    tech_columns = [
+        "scenario_capacity_factor",
+        "lifetime_years",
+        "efficiency_decimal",
+        "om_cost_usd_per_mw_per_yr",
+        "capital_cost_usd_per_mw",
+    ]
+
+    for col in tech_columns:
+        if col in aggregated.columns:
+            gap_spec[col] = standard_hierarchy
+
+    # Price columns use a simplified hierarchy focused on temporal and geographic consistency
+    price_hierarchy = [
+        # ["scenario_year", "technology", "scenario_geography", "scenario_type"],
+        # ["scenario_year", "technology", "scenario_geography"],
+        # ["scenario_year", "technology", "scenario_type"],
+        # ["scenario_year", "technology"],
+        # ["technology", "scenario_geography"],
+        ["technology"],
+    ]
+
+    if "scenario_price" in aggregated.columns:
+        gap_spec["scenario_price"] = price_hierarchy
+
+    # Fuel price uses fuel-specific hierarchy with cross-fuel fallbacks
+    if "fuel_price" in aggregated.columns:
+        gap_spec["fuel_price"] = [
+            # [
+            #     "scenario_year",
+            #     "fuel_for_price",
+            #     "scenario_geography",
+            #     "scenario_type",
+            #     "stringency",
+            # ],
+            # ["scenario_year", "fuel_for_price", "scenario_geography", "scenario_type"],
+            # ["scenario_year", "fuel_for_price", "scenario_geography"],
+            # ["scenario_year", "fuel_for_price", "scenario_type"],
+            # ["scenario_year", "fuel_for_price"],
+            # ["fuel_for_price", "scenario_geography"],
+            ["fuel_for_price"],
+        ]
+
+    agg_fn = {"fuel_price": "mean"}  # use mean for fuel cascade; median elsewhere
+    # aggregated = gap_fill_with_lookup_table(
+    #     aggregated, gap_spec, global_fallback_hierarchy, agg_fn
+    # )
+
+    # Scenario type update based on stringency values
+    if "scenario_type" in aggregated.columns:
+        # Create baseline mask combining both WITCH and IMAGE baseline scenarios
+        baseline_mask = (
+            ((aggregated["scenario_provider"] == "WITCH 5.0") 
+             & aggregated["scenario"].isin(["CO_CurPol", "EN_NoPolicy"]))
+            | ((aggregated["scenario_provider"] == "IMAGE 3.2")
+               & aggregated["scenario"].isin(["SSP1-baseline", "SSP2-baseline"]))
+        )
+        
+        # Apply scenario types based on the combined mask
+        aggregated.loc[baseline_mask, "scenario_type"] = "baseline"
+        aggregated.loc[~baseline_mask, "scenario_type"] = "target"
+
+    # Write main aggregated output with columns ordering similar to original
+    base_cols = [
+        "scenario_provider",
+        "scenario",
+        "scenario_type",
+        "scenario_geography",
+        "sector",
+        "technology",
+        "technology_type",
+        "price_unit",
+        "price_indicator",
+        "scenario_price",
+        "fuel_price",
+        "pathway_unit",
+        "scenario_pathway",
+        "scenario_capacity_factor",
+        "scenario_year",
+        "country_iso2_list",
+        "stringency",
+        "gap_filled_columns",  # Include gap-filling tracking
+    ]
+    extra_cols = [c for c in aggregated.columns if c not in base_cols]
+    final_cols = [c for c in base_cols + extra_cols if c in aggregated.columns]
+    out_file = "4_final_AR6_aggregated.csv"
+    aggregated[final_cols].to_csv(out_file, index=False)
+    print(f"✅ Wrote {out_file} | Shape: {aggregated[final_cols].shape}")
+
+    # Complete-case filtering
+    critical = [
+        c
+        for c in [
+            "scenario_pathway",
+            "scenario_price",
+            "om_cost_usd_per_mw_per_yr",
+            "capital_cost_usd_per_mw",
+        ]
+        if c in aggregated.columns
+    ]
+    complete_mask = (
+        aggregated[critical].notna().all(axis=1)
+        if critical
+        else pd.Series(True, index=aggregated.index)
+    )
+    if "efficiency_decimal" in aggregated.columns:
+        # Define renewable technologies that should have efficiency data
+        renewable_tech_keywords = [
+            "Solar",
+            "Wind",
+            "Hydro",
+            "Geothermal",
+            "Nuclear",
+            "Non-Biomass Renewables",
+            "Electricity - Non-Biomass Renewables",
+        ]
+
+        # Create mask for renewable technologies
+        is_renewable = (
+            aggregated["technology"]
+            .astype(str)
+            .apply(lambda x: any(keyword in x for keyword in renewable_tech_keywords))
+        )
+
+        # Efficiency condition: renewable technologies OR legacy Renewables sector should have efficiency
+        eff_cond = ~(
+            (aggregated["sector"].isin(["Power", "Renewables"]) | is_renewable)
+            & aggregated["efficiency_decimal"].isna()
+        )
+        complete_mask = complete_mask & eff_cond
+
+    final_complete = aggregated.loc[complete_mask, final_cols].copy()
+    complete_file = "4_final_AR6_aggregated_complete.csv"
+    final_complete.to_csv(complete_file, index=False)
+    print(f"✅ Wrote {complete_file} | Shape: {final_complete.shape}")
+
+# =====
+# main
+# =====
+
+
+def main() -> None:
+    print_banner("AR6 Combined Pipeline — Start")
+    # Step 1: create intermediate ISO3/R10 files; each step frees memory before the next
+    step1_run()
+    # Step 2
+    step2_filter_and_pivot()
+    # Step 3
+    step3_finalize_target_schema()
+    # Step 4
+    step4_aggregate_and_gapfill()
     print_banner("AR6 Combined Pipeline — Done")
 
 
