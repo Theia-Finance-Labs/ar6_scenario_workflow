@@ -82,9 +82,9 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
         raise ValueError("dataset_type must be 'ISO3' or 'R10'")
 
     input_file = (
-        "AR6_Scenarios_Database_ISO3_v1.1.feather"
+        "data/AR6_Scenarios_Database_ISO3_v1.1.feather"
         if dataset_type == "ISO3"
-        else "AR6_Scenarios_Database_R10_regions_v1.1.feather"
+        else "data/AR6_Scenarios_Database_R10_regions_v1.1.feather"
     )
     output_file = (
         "1_intermediate_AR6_scenario_formatting_ISO3.csv"
@@ -101,10 +101,10 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
         target_models = ["WITCH 5.0"]  # , "IMAGE 3.2"]
         target_scenarios = ["EN_NPi2020_500", "CO_CurPol"]
         print(f"   Before model filter: {source.shape[0]:,} rows")
-        source = source[
-            source["Model"].isin(target_models)
-            & source["Scenario"].isin(target_scenarios)
-        ]
+        #source = source[
+        #    source["Model"].isin(target_models)
+        #    & source["Scenario"].isin(target_scenarios)
+        #]
         print(f"   After model filter (WITCH 5.0, IMAGE 3.2): {source.shape[0]:,} rows")
 
         if source.empty:
