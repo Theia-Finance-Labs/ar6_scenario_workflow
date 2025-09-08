@@ -48,8 +48,8 @@ def load_and_process_raw_ar6() -> pd.DataFrame:
     
     # Try to load raw feather files
     raw_files = [
-        "AR6_Scenarios_Database_ISO3_v1.1.feather",
-        "AR6_Scenarios_Database_R10_regions_v1.1.feather"
+        "data/AR6_Scenarios_Database_ISO3_v1.1.feather",
+        "data/AR6_Scenarios_Database_R10_regions_v1.1.feather"
     ]
     
     all_processed = []
@@ -254,52 +254,76 @@ def add_geography_mapping(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def interpolate_to_yearly_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Ultra-fast interpolation using pure vectorized operations - NO GROUPBY APPLY"""
-    print("      Creating complete yearly time series (ultra-fast vectorized approach)...")
+    """Linear interpolation to create complete yearly time series (lifetimes use forward-fill)"""
+    print("      Creating complete yearly time series (linear interpolation, lifetimes use forward-fill)...")
     
     # Define target years (2023-2050 inclusive)
     target_years = list(range(2023, 2051))
     
-    # For speed, skip interpolation and just use forward fill
-    # Most technology data doesn't change much year-to-year anyway
-    print("      Using forward-fill strategy for maximum speed...")
-    
     # Get unique time series identifiers
     grouping_cols = ['Model', 'Scenario', 'Region', 'Variable', 'Unit', 'Sector', 'Technology', 'country_iso2_list', 'stringency']
     
-    # Sort by year within each group for proper forward filling
+    # Sort by year within each group for proper interpolation
     df_sorted = df.sort_values(grouping_cols + ['Year'])
     
-    # Create a multi-index for fast operations
-    df_sorted = df_sorted.set_index(grouping_cols + ['Year'])
+    print(f"      Processing {len(df_sorted):,} input rows...")
     
-    # Create a complete index with all years
-    unique_groups = df[grouping_cols].drop_duplicates()
-    years_df = pd.DataFrame({'Year': target_years})
+    # Process each group separately to avoid memory issues
+    result_list = []
     
-    # Ultra-fast cartesian product using vectorized operations
-    complete_df = unique_groups.assign(key=1).merge(years_df.assign(key=1), on='key').drop('key', axis=1)
-    complete_df = complete_df.set_index(grouping_cols + ['Year'])
+    for name, group in df_sorted.groupby(grouping_cols):
+        # Create complete year range for this group
+        group_years = group['Year'].values
+        min_year, max_year = group_years.min(), group_years.max()
+        
+        # Only interpolate within the data range
+        target_years_group = [y for y in target_years if min_year <= y <= max_year]
+        
+        if len(target_years_group) > 0:
+            # Create complete DataFrame for this group
+            group_df = pd.DataFrame({
+                'Year': target_years_group,
+                'Value': np.nan
+            })
+            
+            # Merge with actual data
+            group_df = group_df.merge(group[['Year', 'Value']], on='Year', how='left', suffixes=('', '_actual'))
+            group_df['Value'] = group_df['Value_actual']
+            group_df = group_df.drop('Value_actual', axis=1)
+            
+            # Check if this is a lifetime variable - use forward-fill for lifetimes
+            variable_name = name[3]  # Variable is the 4th element in grouping_cols
+            is_lifetime = 'Lifetime' in str(variable_name)
+            
+            if is_lifetime:
+                # For lifetime variables, use forward-fill (lifetimes don't change linearly)
+                group_df['Value'] = group_df['Value'].ffill().bfill()
+            else:
+                # For other variables, use linear interpolation
+                group_df['Value'] = group_df['Value'].interpolate(method='linear', limit_direction='both')
+                
+                # For groups with only one data point, forward/backward fill
+                if group_df['Value'].notna().sum() == 1:
+                    group_df['Value'] = group_df['Value'].ffill().bfill()
+            
+            # Add grouping columns back
+            for i, col in enumerate(grouping_cols):
+                group_df[col] = name[i]
+            
+            # Only keep rows with valid values
+            group_df = group_df.dropna(subset=['Value'])
+            
+            if len(group_df) > 0:
+                result_list.append(group_df)
     
-    print(f"      Created {len(complete_df):,} complete combinations")
-    
-    # Reindex to get missing years, then forward fill
-    result = df_sorted.reindex(complete_df.index)
-    
-    # Forward fill within each group (vectorized)
-    result['Value'] = result.groupby(level=grouping_cols)['Value'].ffill()
-    
-    # Backward fill to handle leading NaNs
-    result['Value'] = result.groupby(level=grouping_cols)['Value'].bfill()
-    
-    # Reset index and filter out remaining NaNs
-    result = result.reset_index()
-    result = result.dropna(subset=['Value'])
-    
-    print(f"      ✅ Ultra-fast interpolation complete")
-    print(f"      📈 Result: {len(result):,} yearly data points")
-    
-    return result
+    if result_list:
+        final_result = pd.concat(result_list, ignore_index=True)
+        print(f"      ✅ Linear interpolation complete (lifetimes used forward-fill)")
+        print(f"      📈 Result: {len(final_result):,} yearly data points")
+        return final_result
+    else:
+        print("      ⚠️ No data after interpolation")
+        return pd.DataFrame()
 
 
 def add_scenario_categorization(df: pd.DataFrame) -> pd.DataFrame:
@@ -832,6 +856,47 @@ def create_lookup_from_melted(melted_df: pd.DataFrame, group_name: str = "Unknow
     
     if any(col in lookup_pivoted.columns for col in price_conversions.values()):
         print("     ✅ All price units converted from GJ to MWh")
+    
+    # CRITICAL: Apply extreme value filtering after unit conversions
+    print("   🚫 Applying extreme value filtering...")
+    
+    # Define bounds for extreme value filtering (user-specified)
+    bounds = {
+        'efficiency_decimal': (0.2, 1.0),
+        'fuel_price_usd_per_mwh': (0, 200),
+        'electricity_price_usd_per_mwh': (0, 200),
+        'capital_cost_usd_per_mw': (0, 1e7),
+        'om_cost_usd_per_mw_per_yr': (0, 5e5)
+    }
+    
+    # Count violations before filtering
+    violations_before = 0
+    for col, (min_val, max_val) in bounds.items():
+        if col in lookup_pivoted.columns:
+            violations = ((lookup_pivoted[col] < min_val) | (lookup_pivoted[col] > max_val)).sum()
+            violations_before += violations
+            if violations > 0:
+                print(f"     {col}: {violations:,} values outside bounds ({min_val}-{max_val})")
+    
+    print(f"     Total violations before filtering: {violations_before:,}")
+    
+    # Apply filtering by setting out-of-bounds values to NaN
+    filtered_count = 0
+    for col, (min_val, max_val) in bounds.items():
+        if col in lookup_pivoted.columns:
+            # Create mask for out-of-bounds values
+            out_of_bounds = (lookup_pivoted[col] < min_val) | (lookup_pivoted[col] > max_val)
+            count_filtered = out_of_bounds.sum()
+            
+            if count_filtered > 0:
+                lookup_pivoted.loc[out_of_bounds, col] = np.nan
+                filtered_count += count_filtered
+                print(f"     ✅ Filtered {count_filtered:,} out-of-bounds values for {col}")
+    
+    if filtered_count > 0:
+        print(f"     ✅ Total extreme values filtered: {filtered_count:,}")
+    else:
+        print("     ✅ No extreme values found to filter")
     
     print(f"✅ Final lookup table: {len(lookup_pivoted):,} rows × {len(lookup_pivoted.columns)} columns")
     
