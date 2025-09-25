@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 """
-AR6 Violin Plot Generator with Proper Stringency 
-================================================
+AR6 Non-Gap-Filled Data Violin Plot Generator
+==============================================
 
-This script generates violin plots using the official AR6 stringency mapping
-that has been added to the processed files.
+This script analyzes the original (non-gap-filled) values from 4_final_AR6_gapfilled.csv
+and creates publication-ready violin plots showing the distribution of key metrics
+by technology and stringency level.
+
+For each technology, creates a grid plot with:
+- Y-axis: Stringency levels (C1-C8, UNKNOWN)
+- X-axis: 6 metrics (efficiency, lifetime_years, om_cost, capital_cost, scenario_price, fuel_price)
+- Violin plots with scatter overlay showing all countries
+
+Output: PNG files in analysis/plots/ directory
 """
 
 import pandas as pd
@@ -26,47 +34,25 @@ METRICS = [
 ]
 
 METRIC_LABELS = {
-    'efficiency_decimal': 'Efficiency\\n(decimal)',
-    'lifetime_years': 'Lifetime\\n(years)',
-    'om_cost_usd_per_mw_per_yr': 'O&M Cost\\n(USD/MW/yr)',
-    'capital_cost_usd_per_mw': 'Capital Cost\\n(USD/MW)',
-    'scenario_price': 'Electricity Price\\n(USD/MWh)',
-    'fuel_price': 'Fuel Price\\n(USD/MWh)'
+    'efficiency_decimal': 'Efficiency\n(decimal)',
+    'lifetime_years': 'Lifetime\n(years)',
+    'om_cost_usd_per_mw_per_yr': 'O&M Cost\n(USD/MW/yr)',
+    'capital_cost_usd_per_mw': 'Capital Cost\n(USD/MW)',
+    'scenario_price': 'Electricity Price\n(USD/MWh)',
+    'fuel_price': 'Fuel Price\n(USD/MWh)'
 }
 
 # Stringency order for consistent plotting
 STRINGENCY_ORDER = ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'UNKNOWN']
 
 def load_and_filter_data():
-    """Load data with proper stringency and filter out gap-filled values"""
-    print("📂 Loading AR6 data with stringency...")
-    
-    # Try to load the complete file first
-    for filename in ['../4_final_AR6_gapfilled_complete.csv', '../4_final_AR6_gapfilled.csv']:
-        try:
-            df = pd.read_csv(filename, low_memory=False)
-            print(f"   ✅ Loaded {len(df):,} rows from {filename}")
-            break
-        except FileNotFoundError:
-            print(f"   ⚠️  {filename} not found, trying next...")
-            continue
-    else:
-        print("   ❌ No AR6 files found!")
-        return None, []
-    
-    # Check if stringency column exists
-    if 'stringency' not in df.columns:
-        print("   ⚠️  No stringency column found!")
-        print("   Please run add_stringency_to_existing_files.py first")
-        return None, []
-    
-    # Show stringency distribution
-    print("   📊 Stringency distribution in loaded data:")
-    stringency_counts = df['stringency'].value_counts()
-    for stringency in STRINGENCY_ORDER:
-        count = stringency_counts.get(stringency, 0)
-        if count > 0:
-            print(f"     {stringency}: {count:,}")
+    """
+    Load the gap-filled data and create a version with only original (non-gap-filled) values
+    by setting gap-filled values to NaN.
+    """
+    print("📂 Loading 4_final_AR6_gapfilled.csv...")
+    df = pd.read_csv('../4_final_AR6_gapfilled.csv', low_memory=False)
+    print(f"   Loaded {len(df):,} rows")
     
     # Create a copy for filtering
     df_original = df.copy()
@@ -76,16 +62,17 @@ def load_and_filter_data():
     gap_filled_count = 0
     
     for idx, row in df.iterrows():
-        if idx % 500000 == 0:
+        if idx % 100000 == 0:
             print(f"   Processed {idx:,} rows...")
             
         gap_filled_str = row.get('gap_filled_columns')
         if pd.isna(gap_filled_str) or gap_filled_str == '':
             continue
             
-        # Parse the gap-filled columns
+        # Parse the gap-filled columns (comma-separated, may have suffixes like (global))
         gap_filled_cols = []
         for col_str in str(gap_filled_str).split(','):
+            # Extract base column name (remove suffixes like (global), (tech_fallback))
             base_col = col_str.split('(')[0].strip()
             if base_col in METRICS:
                 gap_filled_cols.append(base_col)
@@ -98,7 +85,13 @@ def load_and_filter_data():
     
     print(f"   Set {gap_filled_count:,} gap-filled values to NaN")
     
-    # Filter to technologies with sufficient data
+    # Add stringency column (extract from scenario or use UNKNOWN)
+    df_original['stringency'] = 'UNKNOWN'
+    for stringency in ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8']:
+        mask = df_original['scenario'].str.contains(stringency, na=False)
+        df_original.loc[mask, 'stringency'] = stringency
+    
+    # Filter to technologies with sufficient data for plotting
     print("📊 Filtering technologies with sufficient data...")
     tech_data_counts = {}
     
@@ -113,21 +106,23 @@ def load_and_filter_data():
             if metric in tech_df.columns:
                 data_count += tech_df[metric].notna().sum()
         
-        if data_count > 50:  # Minimum threshold
+        if data_count > 50:  # Minimum threshold for meaningful plots
             tech_data_counts[tech] = data_count
     
     # Sort technologies by data availability
     sorted_techs = sorted(tech_data_counts.items(), key=lambda x: x[1], reverse=True)
-    selected_techs = [tech for tech, count in sorted_techs[:20]]  # Top 20
+    selected_techs = [tech for tech, count in sorted_techs[:20]]  # Top 20 technologies
     
     print(f"   Selected {len(selected_techs)} technologies with sufficient data:")
-    for tech, count in sorted_techs[:10]:  # Show top 10
+    for tech, count in sorted_techs[:20]:
         print(f"     {tech}: {count:,} data points")
     
     return df_original, selected_techs
 
 def create_violin_plot(df, technology, output_dir):
-    """Create violin plot for a technology by stringency"""
+    """
+    Create a violin plot for a specific technology showing all metrics by stringency.
+    """
     print(f"📈 Creating violin plot for {technology}...")
     
     # Filter data for this technology
@@ -147,16 +142,17 @@ def create_violin_plot(df, technology, output_dir):
         ax = axes[i]
         
         # Prepare data for this metric
+        plot_data = []
         metric_values = tech_df[tech_df[metric].notna()]
         
         if len(metric_values) == 0:
-            ax.text(0.5, 0.5, 'No Data\\nAvailable', 
+            ax.text(0.5, 0.5, 'No Data\nAvailable', 
                    ha='center', va='center', transform=ax.transAxes,
                    fontsize=12, alpha=0.5)
             ax.set_title(METRIC_LABELS[metric], fontweight='bold')
             continue
         
-        # Create data for violin plot by stringency
+        # Create data for violin plot
         stringency_data = []
         stringency_labels = []
         
@@ -167,7 +163,7 @@ def create_violin_plot(df, technology, output_dir):
                 stringency_labels.append(stringency)
         
         if len(stringency_data) == 0:
-            ax.text(0.5, 0.5, 'No Data\\nAvailable', 
+            ax.text(0.5, 0.5, 'No Data\nAvailable', 
                    ha='center', va='center', transform=ax.transAxes,
                    fontsize=12, alpha=0.5)
             ax.set_title(METRIC_LABELS[metric], fontweight='bold')
@@ -178,11 +174,9 @@ def create_violin_plot(df, technology, output_dir):
             parts = ax.violinplot(stringency_data, positions=range(len(stringency_labels)), 
                                 showmeans=True, showextrema=True, showmedians=True)
             
-            # Style violin plots with stringency colors
-            colors = ['#d62728', '#ff7f0e', '#2ca02c', '#1f77b4', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
-            for j, pc in enumerate(parts['bodies']):
-                color = colors[j % len(colors)]
-                pc.set_facecolor(color)
+            # Style violin plots
+            for pc in parts['bodies']:
+                pc.set_facecolor('#1f77b4')
                 pc.set_alpha(0.6)
                 pc.set_edgecolor('black')
                 pc.set_linewidth(0.5)
@@ -192,14 +186,22 @@ def create_violin_plot(df, technology, output_dir):
                 parts['cmeans'].set_color('red')
                 parts['cmeans'].set_linewidth(2)
             if 'cmedians' in parts:
-                parts['cmedians'].set_color('orange')  
+                parts['cmedians'].set_color('orange')
                 parts['cmedians'].set_linewidth(2)
+            if 'cbars' in parts:
+                parts['cbars'].set_color('black')
+                parts['cbars'].set_linewidth(1)
+            if 'cmins' in parts and 'cmaxes' in parts:
+                parts['cmins'].set_color('black')
+                parts['cmaxes'].set_color('black')
+                parts['cmins'].set_linewidth(1)
+                parts['cmaxes'].set_linewidth(1)
             
             # Add scatter overlay
             for j, stringency in enumerate(stringency_labels):
                 stringency_values = metric_values[metric_values['stringency'] == stringency][metric].dropna()
                 if len(stringency_values) > 0:
-                    # Add jitter to x-coordinates
+                    # Add jitter to x-coordinates for better visibility
                     x_jitter = np.random.normal(j, 0.05, len(stringency_values))
                     ax.scatter(x_jitter, stringency_values, alpha=0.3, s=8, color='darkblue', zorder=3)
             
@@ -210,7 +212,7 @@ def create_violin_plot(df, technology, output_dir):
             ax.set_title(METRIC_LABELS[metric], fontweight='bold', pad=10)
             ax.grid(True, alpha=0.3, axis='y')
             
-            # Format y-axis
+            # Format y-axis based on metric type
             if metric in ['om_cost_usd_per_mw_per_yr', 'capital_cost_usd_per_mw']:
                 ax.ticklabel_format(style='scientific', axis='y', scilimits=(0,0))
             elif metric in ['scenario_price', 'fuel_price']:
@@ -222,73 +224,53 @@ def create_violin_plot(df, technology, output_dir):
             
         except Exception as e:
             print(f"   Warning: Could not create violin plot for {metric}: {e}")
-            ax.text(0.5, 0.5, f'Plot Error', 
+            ax.text(0.5, 0.5, f'Plot Error:\n{str(e)[:50]}...', 
                    ha='center', va='center', transform=ax.transAxes,
                    fontsize=10, alpha=0.5)
             ax.set_title(METRIC_LABELS[metric], fontweight='bold')
     
-    # Add legend for stringency
-    legend_elements = []
-    colors = ['#d62728', '#ff7f0e', '#2ca02c', '#1f77b4', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
-    
-    # Only add legend for stringencies that have data
-    tech_stringencies = tech_df['stringency'].value_counts()
-    for i, stringency in enumerate(STRINGENCY_ORDER):
-        if stringency in tech_stringencies:
-            color = colors[i % len(colors)]
-            legend_elements.append(plt.Rectangle((0,0),1,1, facecolor=color, alpha=0.6, label=stringency))
-    
-    if legend_elements:
-        fig.legend(handles=legend_elements, title='Stringency Category', 
-                  bbox_to_anchor=(0.02, 0.98), loc='upper left')
-    
     # Adjust layout
     plt.tight_layout()
-    plt.subplots_adjust(top=0.90, hspace=0.3, wspace=0.3)
+    plt.subplots_adjust(top=0.93, hspace=0.3, wspace=0.3)
     
     # Save plot
-    filename = f"{technology.replace('/', '_').replace(' ', '_')}_stringency_violin.png"
+    filename = f"{technology.replace('/', '_').replace(' ', '_')}_violin_plot.png"
     filepath = output_dir / filename
     plt.savefig(filepath, dpi=300, bbox_inches='tight', facecolor='white')
     plt.close()
     
-    print(f"   ✅ Saved: {filename}")
+    print(f"   Saved: {filename}")
 
 def main():
-    """Main function"""
-    print("🎻 AR6 Violin Plot Generator (With Proper Stringency)")
-    print("=" * 60)
+    """Main analysis workflow"""
+    print("🎻 AR6 Violin Plot Generator")
+    print("=" * 50)
     
     # Create output directory
-    output_dir = Path("plots_with_stringency")
+    output_dir = Path("plots")
     output_dir.mkdir(exist_ok=True)
     
     # Load and filter data
     df_original, selected_techs = load_and_filter_data()
     
-    if df_original is None:
-        return
+    print(f"\n📊 Generating violin plots for {len(selected_techs)} technologies...")
     
-    print(f"\\n📊 Generating violin plots for {len(selected_techs)} technologies...")
-    print(f"📁 Output directory: {output_dir.absolute()}")
-    
-    # Generate plots
+    # Generate plots for each technology
     for i, technology in enumerate(selected_techs, 1):
-        print(f"\\n[{i}/{len(selected_techs)}] Processing {technology}...")
+        print(f"\n[{i}/{len(selected_techs)}] Processing {technology}...")
         try:
             create_violin_plot(df_original, technology, output_dir)
         except Exception as e:
-            print(f"   ❌ Error creating plot for {technology}: {e}")
+            print(f"   Error creating plot for {technology}: {e}")
             continue
     
-    print(f"\\n✅ Complete! Generated plots in {output_dir.absolute()}")
-    print("\\nPlot Features:")
-    print("- Violin shapes: Distribution density by stringency (C1-C8)")
-    print("- Colors: Different colors for each stringency category")
+    print(f"\n✅ Complete! Generated plots in {output_dir.absolute()}")
+    print("\nPlot Legend:")
+    print("- Violin shapes: Distribution density")
     print("- Red line: Mean value")
-    print("- Orange line: Median value")
-    print("- Dots: Individual data points (original, non-gap-filled)")
-    print("- X-axis: Stringency categories (C1=most ambitious, C8=least ambitious)")
+    print("- Orange line: Median value") 
+    print("- Black dots: Individual data points (with jitter)")
+    print("- Grid: Stringency (C1-C8) vs Metrics")
 
 if __name__ == "__main__":
     main()
