@@ -1,293 +1,246 @@
 # AR6 Climate Scenario Data Processing Pipeline
 
-A robust, production-ready pipeline for processing IPCC AR6 climate scenario data into analysis-ready format with standardized units and comprehensive quality controls.
+A comprehensive, production-ready pipeline for processing IPCC AR6 climate scenario data into analysis-ready datasets with economic viability analysis, gap-filling, and scenario statistics.
 
 ## Overview
 
-This pipeline transforms raw AR6 climate scenario data from wide format into a clean, pivoted dataset with embedded units, quality filtering, and unit-aware conversions. It handles complex energy data structures and cost metrics while maintaining data integrity through comprehensive validation.
+This pipeline transforms raw AR6 climate scenario data through a 6-step process that includes data formatting, filtering, gap-filling, viability analysis, and comprehensive scenario summarization. The pipeline handles complex energy data structures, cost metrics, and economic viability calculations while maintaining data integrity through comprehensive validation.
 
-## Pipeline Architecture
+## Current Active Pipeline (Steps 1-6)
+
+### Core Pipeline Files (`pipeline/`)
+
+**🚀 `combined_pipeline.py`** - Main unified pipeline (Steps 1-4)
+- Combines formatting, filtering, unit conversion, and gap-filling
+- Memory-optimized for large datasets (2M+ records)  
+- Includes extreme value filtering and global geography aggregation
+- **Status**: Active production pipeline
+
+**⚡ `step4_gapfill_simple.py`** - Ultra-fast vectorized gap-filling
+- Technology lookup-based gap-filling with fallback strategies
+- Tracks which columns were gap-filled for transparency
+- **Status**: Active, imported by combined_pipeline.py
+
+**📊 `step5_complete_cases.py`** - Complete cases filtering  
+- Filters to scenarios with all essential parameters (gap-filled = complete)
+- Identifies viable investment scenarios
+- **Status**: Active (Sep 15, 2024)
+
+**🎯 `step6_scenario_tech_filter.py`** - Technology viability filtering
+- EBITDA-based viability analysis 
+- Filters to economically viable scenarios by technology
+- **Status**: Active (Sep 15, 2024)
+
+### Current Outputs (Generated Dataset Files)
+
+**Pipeline Stage Outputs:**
+```
+1_intermediate_AR6_scenario_formatting_ISO3.csv (3.2GB) - Step 1 formatted data
+2_final_AR6_filtered.csv (761MB) - Step 2 filtered & pivoted  
+3_final_AR6_target_schema.csv (1.0GB) - Step 3 target schema
+4_final_AR6_gapfilled.csv (1.3GB) - Step 4 gap-filled data
+4_final_AR6_gapfilled_complete.csv (730MB) - Step 4 complete cases
+5_final_AR6_complete_cases.csv (756MB) - Step 5 complete scenarios
+6_final_AR6_viable_scenarios.csv (270MB) - Step 6 viable scenarios
+```
+
+**Analysis Outputs:**
+- `scenario_summary_statistics.csv` (180KB) - Comprehensive scenario statistics with gap-filling analysis and EBITDA viability metrics
+
+## Analysis & Visualization Files
+
+### Main Directory Analysis Scripts
+
+**📈 `create_scenario_summary.py`** - Scenario statistics generator
+- Creates comprehensive scenario summaries with provider/scenario names
+- Analyzes technologies included per scenario
+- **Categorized gap-filling analysis**: Costs, Efficiency/Lifetime, Fuel Price, Scenario Price percentages
+- **EBITDA viability analysis**: Technologies with positive EBITDA at least once in time series
+- **Status**: Active (Sep 25, 2024)
+
+**🔧 `create_technology_lookup.py`** - Technology lookup table creator
+- Generates technology parameter lookup tables for gap-filling
+- **Status**: Active
+
+**📊 `generate_country_violin_plots.py`** - Country-level visualization
+- Creates violin plots for country-specific analysis
+- **Status**: Active
+
+### Analysis Directory (`analysis/`)
+
+**Stringency Analysis:**
+- `create_proper_stringency_mapping.py` - AR6 stringency classification
+- `fix_stringency_mapping.py` - Stringency data corrections
+- `ar6_proper_stringency_mapping.csv` - Proper stringency mappings
+- `scenario_stringency_mapping.csv` - Scenario stringency lookup
+
+**Visualization Scripts:**
+- `generate_violin_plots*.py` (5 variants) - Different violin plot analyses
+- `analyze_non_gapfilled_efficiency.py` - Efficiency gap analysis
+
+## Supporting Data Files
+
+### Lookup Tables
+```
+ar6_variables_with_mapping.csv - Variable to technology mapping
+r10_region_lookup.csv - Regional geography mappings  
+technology_lookup_table.csv - Technology parameters for gap-filling
+stringency_mapping_reference.csv - Stringency classification reference
+```
+
+### Intermediate Files (`intermediates/`)
+- Backup copies of key intermediate processing stages
+
+## Archive Directory - Stale/Deprecated Code ⚠️
+
+The `archive/` directory contains **deprecated code** that is no longer used in the current pipeline:
+
+### 🚫 **DEPRECATED** - Original Multi-Step Scripts
+```
+1_formatAR6.py - Replaced by combined_pipeline.py steps 1-2
+2_filterAR6.py - Replaced by combined_pipeline.py steps 1-2  
+3_finalizeAR6.py - Replaced by combined_pipeline.py step 3
+4_aggregateTechnologies.py - Replaced by step4_gapfill_simple.py
+```
+
+### 🚫 **DEPRECATED** - Old Analysis Scripts
+```
+stringency_mapper.py - Replaced by analysis/create_proper_stringency_mapping.py
+country_efficiency_analysis.py - Replaced by generate_country_violin_plots.py
+gap_analysis.py - Analysis superseded by scenario summary
+cost_diagnosis.py - Debug script, no longer needed
+```
+
+### 🚫 **STALE** Data Files in Archive
+- Old CSV outputs from deprecated pipeline stages
+- Outdated technology mappings
+- Debug/test files
+
+**⚠️ IMPORTANT**: Do not use files from `archive/` directory - they are kept for reference only.
+
+## Pipeline Architecture & Data Flow
 
 ```
-AR6_Scenarios_Database_ISO3_v1.1.feather
+Raw AR6 Data (feather files)
     ↓
-1_formatAR6.py → 1_intermediate_AR6_scenario_formatting.csv
+[Step 1-4] combined_pipeline.py → 4_final_AR6_gapfilled_complete.csv
     ↓
-2_filterAR6.py → 2_final_AR6_filtered.csv
+[Step 5] step5_complete_cases.py → 5_final_AR6_complete_cases.csv  
+    ↓
+[Step 6] step6_scenario_tech_filter.py → 6_final_AR6_viable_scenarios.csv
+    ↓
+[Analysis] create_scenario_summary.py → scenario_summary_statistics.csv
 ```
-
-## Scripts
-
-### 1. `1_formatAR6.py` - Data Formatting & Cost Integration
-- Melts AR6 data from wide to long format
-- Integrates cost and efficiency metrics using variable mapping
-- Processes energy price data (primary, secondary, carbon pricing)
-- Outputs intermediate formatted dataset
-
-### 2. `2_filterAR6.py` - Filtering, Pivoting & Unit Standardization
-- **Unit-aware conversions** with safety checks
-- Pivots from long to wide format for analysis
-- Applies quality filters and validation
-- Embeds units in column names for clarity
 
 ## Key Features
 
-### 🛡️ **Unit-Aware Safety System**
-The pipeline automatically detects original units and applies appropriate conversions:
+### 🛡️ **Advanced Gap-Filling System**
+- **Categorized tracking**: Costs (75.6% avg), Efficiency/Lifetime (81.9% avg), Fuel Price (61.3% avg), Scenario Price (58.5% avg)
+- Technology lookup with intelligent fallbacks
+- Transparent gap-fill column tracking
+- Extreme value filtering with configurable bounds
 
-```python
-# Examples of safe conversions:
-GW → MW (×1000)              # Capacity
-EJ/yr → MWh/yr (×2.78×10¹¹)  # Energy  
-USD/kW → USD/MW (×1000)      # Cost metrics
-% → decimal (/100)           # Efficiency
-```
+### 📊 **Economic Viability Analysis** 
+- EBITDA-based technology viability assessment
+- Time-series analysis (positive EBITDA at least once = viable)
+- Average 55.7% of technologies show viability per scenario
+- 1,229 scenarios have >50% viable technologies
 
-### 📊 **Quality Validation**
-- Energy coverage verification by technology
-- Data completeness analysis
-- Unit consistency checking
-- Missing value handling with transparency
+### 🌍 **Global Aggregation**
+- Automatic creation of "Global" geography entries
+- Capacity-weighted averages for technical parameters
+- Simple averages for price data
 
-### 🔧 **Production Ready**
-- Comprehensive error handling
-- Detailed logging and progress reporting
-- Memory-efficient processing for large datasets
-- Robust handling of edge cases
+### 🔍 **Comprehensive Statistics**
+The scenario summary provides:
+- 1,923 unique scenario combinations across 111 providers  
+- Technology coverage analysis (2-20 technologies per scenario)
+- Gap-filling breakdown by parameter category
+- EBITDA viability by technology within scenarios
+- Geographic coverage and year ranges
 
-## Input Data Requirements
+## Usage
 
-### Required Files
-1. **`AR6_Scenarios_Database_ISO3_v1.1.feather`** - Raw AR6 scenario database
-2. **`ar6_variables_with_mapping.csv`** - Variable mapping for cost/efficiency metrics
-
-### Expected Data Structure
-- **Models**: 31 unique climate models
-- **Scenarios**: 400+ future scenarios
-- **Regions**: 49 global regions
-- **Technologies**: 12+ energy technologies
-- **Years**: 1990-2150 timeline
-
-## Output Dataset
-
-### Final Structure: `2_final_AR6_filtered.csv`
-
-**Dimensions**: ~630K rows × 16 columns
-
-#### Grouping Columns (7)
-```
-model, scenario, region, year, Sector, Subsector, Technology
-```
-
-#### Value Columns (9) - Units Embedded
-```
-om_cost_usd_per_mw_per_yr        # O&M costs in USD/MW/year
-capital_cost_usd_per_mw          # Capital costs in USD/MW
-carbon_price_usd_per_tco2        # Carbon price in USD/tCO2
-capacity_mw                      # Installed capacity in MW
-capacity_additions_mw_per_yr     # New capacity in MW/year
-secondary_energy_mwh_per_yr      # Secondary energy in MWh/year
-primary_energy_mwh_per_yr        # Primary energy in MWh/year
-lifetime_years                   # Technology lifetime in years
-efficiency_decimal               # Efficiency as decimal (0-1)
-```
-
-## Edge Cases & Robustness
-
-### 🔍 **Unit Variation Handling**
-
-The pipeline automatically handles different unit conventions:
-
+### Run Complete Pipeline
 ```bash
-# Example: If new data arrives with different units
-Original Unit    →    Conversion Applied    →    Final Unit
-GW              →    ×1000                 →    MW
-MW              →    no conversion         →    MW
-PJ/yr           →    ×2.78×10⁸            →    MWh/yr
-EJ/yr           →    ×2.78×10¹¹           →    MWh/yr
+# Run full pipeline (Steps 1-6)
+python pipeline/combined_pipeline.py  # Steps 1-4
+python pipeline/step5_complete_cases.py  # Step 5
+python pipeline/step6_scenario_tech_filter.py  # Step 6
+
+# Generate scenario summary
+python create_scenario_summary.py
 ```
 
-**Warning Example**:
-```
-⚠️  Capacity: Unknown unit 'TW' - values preserved as-is
-```
-
-### 🏭 **Technology Coverage Edge Cases**
-
-**Perfect Energy Coverage (12/12 technologies)**:
-```
-✅ Biomass - w/ CCS: Primary + Secondary
-✅ Hydro: Primary + Secondary  
-✅ Solar - PV: Secondary only (normal - no primary energy for solar)
-❌ Gas - Synthetic: No energy data (model-specific limitation)
-```
-
-### 📈 **Data Quality Edge Cases**
-
-**Missing Value Patterns** (Normal AR6 behavior):
-```
-Lifetime NA rates: 20.2% (technology-specific reporting)
-Carbon price NAs: 13.2% (model-dependent implementation)
-```
-
-**Model-Specific Coverage**:
-```
-IMAGE model: 100% carbon price coverage
-Other models: Variable coverage (reflects real model differences)
-```
-
-### 🔧 **Processing Edge Cases**
-
-**Fuel Column Handling**:
-```python
-# Problem: NaN values in Fuel break pivot operations
-# Solution: Exclude Fuel from grouping columns
-grouping_cols = ['model', 'scenario', 'region', 'year', 
-                'Sector', 'Subsector', 'Technology']
-# Note: Fuel excluded due to NaN conflicts
-```
-
-**Efficiency Conversion**:
-```python
-# Smart percentage detection
-if efficiency > 1:    # Values like 45.0 (percentage)
-    efficiency = efficiency / 100  # Convert to 0.45 (decimal)
-else:                 # Values like 0.45 (already decimal)
-    efficiency = efficiency        # Keep as-is
-```
-
-## Usage Examples
-
-### Basic Usage
+### Individual Steps
 ```bash
-# Step 1: Format raw AR6 data
-python 1_formatAR6.py
-
-# Step 2: Filter and pivot for analysis
-python 2_filterAR6.py
-```
-
-### Sample Output Inspection
-```python
-import pandas as pd
-
-# Load final dataset
-df = pd.read_csv('2_final_AR6_filtered.csv')
-
-# Inspect structure
-print(f"Shape: {df.shape}")
-print(f"Technologies: {df['Technology'].unique()}")
-print(f"Year range: {df['year'].min()}-{df['year'].max()}")
-
-# Check data availability
-for col in ['capacity_mw', 'secondary_energy_mwh_per_yr', 'om_cost_usd_per_mw_per_yr']:
-    coverage = df[col].notna().sum() / len(df) * 100
-    print(f"{col}: {coverage:.1f}% coverage")
+# Just gap-filling and later steps
+python pipeline/step4_gapfill_simple.py
+python pipeline/step5_complete_cases.py  
+python pipeline/step6_scenario_tech_filter.py
 ```
 
 ## Data Quality Metrics
 
-### Final Dataset Quality (Last Run)
+### Latest Pipeline Run Results
 ```
-Total rows: 633,163
-Technologies: 13 unique (12 with energy data)
-Energy coverage: 99.2% of technologies
-Cost data: 100% coverage (O&M + Capital)
-Carbon pricing: 86.8% coverage
-Future years only: >2020 (projection focus)
-```
-
-### Technology Distribution
-```
-Renewables sector: 328,790 rows (52.0%)
-Power sector: 297,027 rows (46.9%) 
-Gas&Oil sector: 7,346 rows (1.1%)
+Total scenarios processed: 1,923 unique combinations
+Average gap-filling rate: 88.4% of records required gap-filling
+Technology viability: 55.7% of technologies show positive EBITDA
+Complete cases: 756MB final dataset with all essential parameters
+Viable scenarios: 270MB economically feasible scenarios
 ```
 
-### Validation Checks Applied
-- ✅ Future years only (>2020)
-- ✅ Valid sector classification
-- ✅ At least one metric value present
-- ✅ Unit consistency verification
-- ✅ Energy data coverage validation
-
-## Error Handling
-
-### Graceful Degradation
-```python
-# Unknown units: Preserve data with warning
-if unknown_unit:
-    print(f"⚠️  Unknown unit '{unit}' - values preserved as-is")
-    df[target_col] = df[source_col]  # No conversion, no crash
-
-# Missing data: Continue processing
-if metric_data.empty:
-    print(f"❌ No {metric_name} data found")
-    return df  # Continue without this metric
+### Gap-Filling Breakdown by Category
+```
+Efficiency/Lifetime parameters: 81.9% gap-filled (most common)
+Cost parameters (Cap/OM): 75.6% gap-filled  
+Fuel prices: 61.3% gap-filled
+Scenario prices: 58.5% gap-filled
 ```
 
-### Memory Management
-- Efficient pandas operations for large datasets
-- Progressive filtering to reduce memory footprint
-- Chunked processing where applicable
-
-## Performance
-
-### Typical Runtime
-- **Step 1** (Formatting): ~2-3 minutes
-- **Step 2** (Filtering): ~30-60 seconds
-- **Total**: ~3-4 minutes for complete pipeline
-
-### Memory Requirements
-- **Peak memory**: ~4-6 GB during melting operations
-- **Final output**: ~50 MB CSV file
-- **Recommended**: 8+ GB RAM for smooth operation
-
-## Troubleshooting
-
-### Common Issues
-
-**1. Memory Errors**
-```bash
-# Solution: Increase available memory or use chunking
-# Add to script: pd.read_csv(..., chunksize=50000)
+### EBITDA Viability Analysis
 ```
-
-**2. Unit Conversion Warnings**
-```bash
-# Normal: Different models use different unit conventions
-# Action: Review warning messages, data is preserved safely
-```
-
-**3. Missing Energy Data**
-```bash
-# Normal: Some technologies don't report certain energy types
-# Example: Solar has no "primary energy" (physical limitation)
-```
-
-### Validation Commands
-```bash
-# Check intermediate file
-python -c "import pandas as pd; print(pd.read_csv('1_intermediate_AR6_scenario_formatting.csv').shape)"
-
-# Verify final output
-python -c "import pandas as pd; df=pd.read_csv('2_final_AR6_filtered.csv'); print(f'Shape: {df.shape}'); print(f'Columns: {list(df.columns)}')"
+Scenarios with >50% viable technologies: 1,229 (63.9%)
+Scenarios with 0% viable technologies: 655 (34.1%) 
+Average positive EBITDA rate: 55.7% of technologies per scenario
 ```
 
 ## Dependencies
 
 ```python
 pandas>=1.5.0
-numpy>=1.20.0
+numpy>=1.20.0  
 pyarrow>=10.0.0  # For feather format support
+matplotlib>=3.5.0  # For visualization scripts
+seaborn>=0.11.0  # For violin plots
 ```
 
-## License & Attribution
+## File Status Summary
 
-This pipeline processes IPCC AR6 scenario data. Please cite appropriate AR6 Working Group III sources when using this processed data in research or analysis.
+### ✅ **ACTIVE FILES** (Current Pipeline)
+- `pipeline/combined_pipeline.py` - Main pipeline
+- `pipeline/step4_gapfill_simple.py` - Gap-filling engine  
+- `pipeline/step5_complete_cases.py` - Complete cases filter
+- `pipeline/step6_scenario_tech_filter.py` - Viability filter
+- `create_scenario_summary.py` - Statistics generator
+- All CSV outputs (1_* through 6_*, scenario_summary_statistics.csv)
+
+### ⚠️ **DEPRECATED/STALE FILES** (Do Not Use)
+- Everything in `archive/` directory
+- Old analysis scripts replaced by current versions
+- Debug and test files with obsolete logic
+
+### 📊 **REFERENCE FILES** (Supporting Data)
+- `ar6_variables_with_mapping.csv` - Variable mappings
+- `technology_lookup_table.csv` - Gap-filling lookup
+- `r10_region_lookup.csv` - Geographic mappings
+- `stringency_mapping_reference.csv` - Climate stringency data
 
 ---
 
-**Pipeline Version**: 2.0  
-**Last Updated**: 2024  
-**Maintainer**: Energy Data Processing Team 
+**Pipeline Version**: 6.0 (Complete Economic Viability Analysis)  
+**Last Updated**: September 2024  
+**Current Dataset**: 6_final_AR6_viable_scenarios.csv (270MB, economically viable scenarios)
+
+For questions about specific components or to understand the gap-filling methodology, see the comprehensive scenario summary statistics in `scenario_summary_statistics.csv`.
