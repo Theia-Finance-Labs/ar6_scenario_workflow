@@ -12,3 +12,4 @@ AR6_Scenarios_Database_R10_regions_v1.1.feather
 4_final_AR6_gapfilled.csv
 4_final_AR6_gapfilled_complete.csv
 4_final_AR6_gapfilled_complete.csv
+*.pyc
