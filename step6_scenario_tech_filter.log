@@ -1,0 +1,97 @@
+2025-09-15 22:57:55,955 - INFO - Starting scenario technology filtering...
+2025-09-15 22:57:55,955 - INFO - Input file: 5_final_AR6_complete_cases.csv
+2025-09-15 22:57:55,955 - INFO - Output file: 6_final_AR6_viable_scenarios.csv
+2025-09-15 22:57:55,955 - INFO - Reading input data...
+2025-09-15 22:58:00,027 - INFO - Input dataset shape: (2195517, 27)
+2025-09-15 22:58:00,239 - INFO - Power sector technologies: 20
+2025-09-15 22:58:00,239 - INFO -   - BiomassCap
+2025-09-15 22:58:00,239 - INFO -   - BiomassCap - w/ CCS
+2025-09-15 22:58:00,239 - INFO -   - BiomassCap - w/o CCS
+2025-09-15 22:58:00,239 - INFO -   - CoalCap
+2025-09-15 22:58:00,239 - INFO -   - CoalCap - w/ CCS
+2025-09-15 22:58:00,239 - INFO -   - CoalCap - w/o CCS
+2025-09-15 22:58:00,239 - INFO -   - GasCap
+2025-09-15 22:58:00,239 - INFO -   - GasCap - w/ CCS
+2025-09-15 22:58:00,239 - INFO -   - GasCap - w/o CCS
+2025-09-15 22:58:00,239 - INFO -   - GeothermalCap
+2025-09-15 22:58:00,239 - INFO -   - HydroCap
+2025-09-15 22:58:00,239 - INFO -   - Hydrogen
+2025-09-15 22:58:00,239 - INFO -   - NuclearCap
+2025-09-15 22:58:00,239 - INFO -   - OilCap
+2025-09-15 22:58:00,239 - INFO -   - OilCap - w/ CCS
+2025-09-15 22:58:00,239 - INFO -   - OilCap - w/o CCS
+2025-09-15 22:58:00,239 - INFO -   - SolarCap - CSP
+2025-09-15 22:58:00,239 - INFO -   - SolarCap - PV
+2025-09-15 22:58:00,239 - INFO -   - WindCap - Offshore
+2025-09-15 22:58:00,239 - INFO -   - WindCap - Onshore
+2025-09-15 22:58:00,277 - INFO - Total scenarios to evaluate: 960
+2025-09-15 22:58:00,277 - INFO - 
+=== EVALUATING SCENARIO COMPLIANCE ===
+2025-09-15 22:58:04,472 - INFO - Processed 100/960 scenarios...
+2025-09-15 22:58:08,305 - INFO - Processed 200/960 scenarios...
+2025-09-15 22:58:12,622 - INFO - Processed 300/960 scenarios...
+2025-09-15 22:58:16,734 - INFO - Processed 400/960 scenarios...
+2025-09-15 22:58:20,776 - INFO - Processed 500/960 scenarios...
+2025-09-15 22:58:24,879 - INFO - Processed 600/960 scenarios...
+2025-09-15 22:58:28,950 - INFO - Processed 700/960 scenarios...
+2025-09-15 22:58:32,972 - INFO - Processed 800/960 scenarios...
+2025-09-15 22:58:37,009 - INFO - Processed 900/960 scenarios...
+2025-09-15 22:58:39,466 - INFO - 
+=== FILTERING RESULTS ===
+2025-09-15 22:58:39,466 - INFO - Scenarios evaluated: 960
+2025-09-15 22:58:39,466 - INFO - Viable scenarios found: 118
+2025-09-15 22:58:39,466 - INFO - Rejection rate: 87.7%
+2025-09-15 22:58:39,662 - INFO - Original dataset rows: 2,195,517
+2025-09-15 22:58:39,662 - INFO - Filtered dataset rows: 776,895
+2025-09-15 22:58:39,662 - INFO - Data retention rate: 35.4%
+2025-09-15 22:58:39,662 - INFO - 
+=== NON-VIABLE SCENARIO ANALYSIS ===
+2025-09-15 22:58:39,664 - INFO - Technologies causing scenario rejection (Top 10):
+2025-09-15 22:58:39,664 - INFO -   OilCap - w/ CCS: 465 scenarios (55.2%)
+2025-09-15 22:58:39,664 - INFO -   BiomassCap - w/ CCS: 418 scenarios (49.6%)
+2025-09-15 22:58:39,664 - INFO -   GasCap - w/ CCS: 410 scenarios (48.7%)
+2025-09-15 22:58:39,664 - INFO -   HydroCap: 386 scenarios (45.8%)
+2025-09-15 22:58:39,664 - INFO -   CoalCap - w/ CCS: 386 scenarios (45.8%)
+2025-09-15 22:58:39,664 - INFO -   OilCap - w/o CCS: 386 scenarios (45.8%)
+2025-09-15 22:58:39,664 - INFO -   NuclearCap: 378 scenarios (44.9%)
+2025-09-15 22:58:39,664 - INFO -   OilCap: 376 scenarios (44.7%)
+2025-09-15 22:58:39,664 - INFO -   GasCap: 358 scenarios (42.5%)
+2025-09-15 22:58:39,664 - INFO -   BiomassCap: 353 scenarios (41.9%)
+2025-09-15 22:58:39,664 - INFO - 
+=== VIABLE SCENARIO ANALYSIS ===
+2025-09-15 22:58:39,665 - INFO - Sample viable scenarios:
+2025-09-15 22:58:39,665 - INFO -   EN_INDCi2030_1000f: 20/20 technologies
+2025-09-15 22:58:39,665 - INFO -   EN_INDCi2030_1200: 20/20 technologies
+2025-09-15 22:58:39,665 - INFO -   EN_INDCi2030_1200f: 20/20 technologies
+2025-09-15 22:58:39,665 - INFO -   EN_INDCi2030_1400: 20/20 technologies
+2025-09-15 22:58:39,665 - INFO -   EN_INDCi2030_1400f: 20/20 technologies
+2025-09-15 22:58:39,665 - INFO - 
+Technology coverage in viable scenarios:
+2025-09-15 22:58:39,665 - INFO -   GasCap: 118/118 scenarios (100.0%)
+2025-09-15 22:58:39,665 - INFO -   GasCap - w/o CCS: 118/118 scenarios (100.0%)
+2025-09-15 22:58:39,665 - INFO -   BiomassCap: 111/118 scenarios (94.1%)
+2025-09-15 22:58:39,665 - INFO -   BiomassCap - w/o CCS: 111/118 scenarios (94.1%)
+2025-09-15 22:58:39,665 - INFO -   CoalCap: 111/118 scenarios (94.1%)
+2025-09-15 22:58:39,665 - INFO -   CoalCap - w/o CCS: 111/118 scenarios (94.1%)
+2025-09-15 22:58:39,665 - INFO -   HydroCap: 111/118 scenarios (94.1%)
+2025-09-15 22:58:39,665 - INFO -   OilCap: 111/118 scenarios (94.1%)
+2025-09-15 22:58:39,665 - INFO -   WindCap - Onshore: 111/118 scenarios (94.1%)
+2025-09-15 22:58:39,665 - INFO -   NuclearCap: 110/118 scenarios (93.2%)
+2025-09-15 22:58:39,665 - INFO -   OilCap - w/o CCS: 110/118 scenarios (93.2%)
+2025-09-15 22:58:39,665 - INFO -   GasCap - w/ CCS: 108/118 scenarios (91.5%)
+2025-09-15 22:58:39,665 - INFO -   BiomassCap - w/ CCS: 106/118 scenarios (89.8%)
+2025-09-15 22:58:39,665 - INFO -   CoalCap - w/ CCS: 106/118 scenarios (89.8%)
+2025-09-15 22:58:39,665 - INFO -   OilCap - w/ CCS: 103/118 scenarios (87.3%)
+2025-09-15 22:58:39,665 - INFO -   WindCap - Offshore: 93/118 scenarios (78.8%)
+2025-09-15 22:58:39,665 - INFO -   Hydrogen: 85/118 scenarios (72.0%)
+2025-09-15 22:58:39,665 - INFO -   GeothermalCap: 78/118 scenarios (66.1%)
+2025-09-15 22:58:39,665 - INFO -   SolarCap - PV: 54/118 scenarios (45.8%)
+2025-09-15 22:58:39,665 - INFO -   SolarCap - CSP: 47/118 scenarios (39.8%)
+2025-09-15 22:58:39,665 - INFO - 
+Saving viable scenarios to: 6_final_AR6_viable_scenarios.csv
+2025-09-15 22:58:44,106 - INFO - 
+=== FINAL SUMMARY ===
+2025-09-15 22:58:44,106 - INFO - Viable scenarios: 118
+2025-09-15 22:58:44,106 - INFO - Total rows retained: 776,895
+2025-09-15 22:58:44,106 - INFO - Power technologies required: 20
+2025-09-15 22:58:44,107 - INFO - Filtering completed successfully!

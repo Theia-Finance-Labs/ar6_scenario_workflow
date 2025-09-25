@@ -276,8 +276,8 @@ def interpolate_to_yearly_data(df: pd.DataFrame) -> pd.DataFrame:
         group_years = group['Year'].values
         min_year, max_year = group_years.min(), group_years.max()
         
-        # Only interpolate within the data range
-        target_years_group = [y for y in target_years if min_year <= y <= max_year]
+        # Use FULL target range (2023-2050) to enable forward/backfill coverage
+        target_years_group = target_years
         
         if len(target_years_group) > 0:
             # Create complete DataFrame for this group
@@ -302,9 +302,9 @@ def interpolate_to_yearly_data(df: pd.DataFrame) -> pd.DataFrame:
                 # For other variables, use linear interpolation
                 group_df['Value'] = group_df['Value'].interpolate(method='linear', limit_direction='both')
                 
-                # For groups with only one data point, forward/backward fill
-                if group_df['Value'].notna().sum() == 1:
-                    group_df['Value'] = group_df['Value'].ffill().bfill()
+                # After interpolation, extend to full range with forward/backfill
+                # This ensures data coverage for full 2023-2050 range
+                group_df['Value'] = group_df['Value'].ffill().bfill()
             
             # Add grouping columns back
             for i, col in enumerate(grouping_cols):
@@ -545,7 +545,7 @@ def create_lookup_from_melted(melted_df: pd.DataFrame, group_name: str = "Unknow
                 
                 # Get ALL power generation technologies (including renewables)
                 all_power_techs = [
-                    'SolarCap', 'WindCap', 'HydroCap', 'GeothermalCap', 'NuclearCap', 'OceanCap',
+                    'SolarCap', 'WindCap', 'WindCap - Onshore', 'WindCap - Offshore', 'HydroCap', 'GeothermalCap', 'NuclearCap', 'OceanCap',
                     'CoalCap', 'CoalCap - w/ CCS', 'CoalCap - w/o CCS',
                     'GasCap', 'GasCap - w/ CCS', 'GasCap - w/o CCS', 
                     'OilCap', 'OilCap - w/ CCS', 'OilCap - w/o CCS',
@@ -634,37 +634,6 @@ def create_lookup_from_melted(melted_df: pd.DataFrame, group_name: str = "Unknow
     
     # CRITICAL: Aggregate detailed technology variants into base technologies
     print("   🔧 Aggregating detailed technology variants into base technologies...")
-    
-    # Define technology variant aggregation mapping
-    tech_aggregation_map = {
-        # Solar variants → SolarCap
-        "SolarCap - CSP": "SolarCap",
-        "SolarCap - PV": "SolarCap", 
-        "SolarCap - Rooftop PV": "SolarCap",
-        "SolarCap - Utility PV": "SolarCap",
-        
-        # Wind variants → WindCap
-        "WindCap - Offshore": "WindCap",
-        "WindCap - Onshore": "WindCap",
-        # WindCap already exists as is
-        
-        # Biomass base variants → BiomassCap variants  
-        "Biomass - w/ CCS": "BiomassCap - w/ CCS",
-        "Biomass - w/o CCS": "BiomassCap - w/o CCS",
-        
-        # Coal base variants → CoalCap variants
-        "Coal - w/o CCS": "CoalCap - w/o CCS",
-        
-        # Gas base variants → GasCap variants
-        "Gas - w/ CCS": "GasCap - w/ CCS", 
-        "Gas - w/o CCS": "GasCap - w/o CCS",
-        
-        # Oil → OilCap
-        "Oil": "OilCap"
-    }
-    
-    # Apply aggregation mapping
-    lookup_pivoted['technology'] = lookup_pivoted['technology'].replace(tech_aggregation_map)
     
     # Aggregate data for technologies that now have multiple rows
     print("   📊 Aggregating duplicate technologies after mapping...")
@@ -791,7 +760,7 @@ def create_lookup_from_melted(melted_df: pd.DataFrame, group_name: str = "Unknow
     
     # Define which technologies each group should handle
     group_tech_mapping = {
-        "Renewables": ["SolarCap", "WindCap", "HydroCap", "GeothermalCap", "NuclearCap", "OceanCap"],
+        "Renewables": ["SolarCap", "WindCap", "WindCap - Onshore", "WindCap - Offshore", "HydroCap", "GeothermalCap", "NuclearCap", "OceanCap"],
         "Coal": ["CoalCap", "CoalCap - w/ CCS", "CoalCap - w/o CCS"],
         "Gas": ["GasCap", "GasCap - w/ CCS", "GasCap - w/o CCS"],
         "Biomass": ["BiomassCap", "BiomassCap - w/ CCS", "BiomassCap - w/o CCS"],
@@ -1017,7 +986,7 @@ def create_lookup_from_melted(melted_df: pd.DataFrame, group_name: str = "Unknow
     else:
         # Fallback for unknown groups
         target_power_technologies = [
-            "SolarCap", "WindCap", "HydroCap", "GeothermalCap", "NuclearCap", 
+            "SolarCap", "WindCap", "WindCap - Onshore", "WindCap - Offshore", "HydroCap", "GeothermalCap", "NuclearCap", 
             "BiomassCap", "CoalCap", "GasCap", "OilCap",
             "BiomassCap - w/ CCS", "CoalCap - w/ CCS", "GasCap - w/ CCS", "OilCap - w/ CCS",
             "BiomassCap - w/o CCS", "CoalCap - w/o CCS", "GasCap - w/o CCS", "OilCap - w/o CCS"

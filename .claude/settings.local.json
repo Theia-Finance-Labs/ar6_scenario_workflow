@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__ide__executeCode",
+      "Bash(python3:*)",
+      "Bash(pip3 install:*)",
+      "Read(/Users/omaxim/Documents/GitHub/TheiaFInanceLabs/**)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(python:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

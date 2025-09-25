@@ -61,7 +61,12 @@ def ultra_fast_gap_fill(df: pd.DataFrame, lookup_df: pd.DataFrame) -> pd.DataFra
         "CoalCap": "CoalCap - w/o CCS",
         "BiomassCap": "BiomassCap - w/o CCS", 
         "GasCap": "GasCap - w/o CCS",
-        "OilCap": "OilCap - w/o CCS"
+        "OilCap": "OilCap - w/o CCS",
+        # CCS variants taking non-ccs costs in case of missing data
+        "CoalCap - w/ CCS": "CoalCap - w/o CCS",
+        "BiomassCap - w/ CCS": "BiomassCap - w/o CCS",
+        "GasCap - w/ CCS": "GasCap - w/o CCS",
+        "OilCap - w/ CCS": "OilCap - w/o CCS"
     }
     
     # Process each column independently for maximum speed
@@ -123,6 +128,26 @@ def ultra_fast_gap_fill(df: pd.DataFrame, lookup_df: pd.DataFrame) -> pd.DataFra
         missing_mask = df[df_col].isna()
         missing_df = df[missing_mask].copy()
         
+        # STRATEGY 2b: Cross-fossil fallbacks (Oil -> average of Coal+Gas within same CCS category)
+        if len(missing_df) > 0:
+            print(f"    ⛽ Strategy 2b: Cross-fossil fallbacks (Oil -> Coal+Gas average)...")
+            
+            oil_techs_missing = missing_df[missing_df['technology'].str.contains('Oil', na=False)]
+            if len(oil_techs_missing) > 0:
+                cross_fossil_filled = cross_fossil_fallback_vectorized(oil_techs_missing, lookup_df, df_col, lookup_col)
+                if len(cross_fossil_filled) > 0:
+                    df.loc[cross_fossil_filled.index, df_col] = cross_fossil_filled
+                    df.loc[cross_fossil_filled.index, "gap_filled_columns"] = update_tracking(
+                        df.loc[cross_fossil_filled.index, "gap_filled_columns"], f"{df_col}(oil_coal_gas_avg)"
+                    )
+                    col_filled += len(cross_fossil_filled)
+                    filled_counts[df_col] += len(cross_fossil_filled)
+                    print(f"      ✅ Oil->Coal+Gas average: {len(cross_fossil_filled)} values")
+
+        # Update missing mask after cross-fossil fallbacks
+        missing_mask = df[df_col].isna()
+        missing_df = df[missing_mask].copy()
+        
         # STRATEGY 3: Global fallback
         if len(missing_df) > 0:
             print(f"    🌍 Strategy 3: Global fallbacks...")
@@ -135,6 +160,30 @@ def ultra_fast_gap_fill(df: pd.DataFrame, lookup_df: pd.DataFrame) -> pd.DataFra
                 col_filled += len(global_filled)
                 filled_counts[df_col] += len(global_filled)
                 print(f"      ✅ Global fallback: {len(global_filled)} values")
+        
+        # Update missing mask after global fallbacks
+        missing_mask = df[df_col].isna()
+        missing_df = df[missing_mask].copy()
+        
+        # STRATEGY 4: Hardcoded fallbacks for systematic missing data
+        if len(missing_df) > 0 and df_col == "lifetime_years":
+            print(f"    🔧 Strategy 4: Hardcoded fallbacks for systematic missing data...")
+            
+            # OilCap lifetime: calculated mean from GasCap+CoalCap (65,620 data points)
+            OILCAP_LIFETIME_FALLBACK = 36.6
+            
+            oilcap_variants = ["OilCap", "OilCap - w/ CCS", "OilCap - w/o CCS"]
+            
+            for oil_tech in oilcap_variants:
+                oil_missing = missing_df[missing_df['technology'] == oil_tech]
+                if len(oil_missing) > 0:
+                    df.loc[oil_missing.index, df_col] = OILCAP_LIFETIME_FALLBACK
+                    df.loc[oil_missing.index, "gap_filled_columns"] = update_tracking(
+                        df.loc[oil_missing.index, "gap_filled_columns"], f"{df_col}(hardcoded_fallback)"
+                    )
+                    col_filled += len(oil_missing)
+                    filled_counts[df_col] += len(oil_missing)
+                    print(f"      ✅ {oil_tech} hardcoded fallback: {len(oil_missing)} values ({OILCAP_LIFETIME_FALLBACK} years)")
         
         print(f"    🎯 Total filled for {df_col}: {col_filled}")
     
@@ -166,65 +215,20 @@ def direct_technology_match(missing_df: pd.DataFrame, lookup_df: pd.DataFrame,
         if len(lookup_subset) == 0:
             return pd.Series(dtype=float)
         
-        # For each missing row, find matching lookup entries
+        # Group by year/stringency for efficiency
         results = []
-        for idx, row in missing_df.iterrows():
+        for (year, stringency), year_group in missing_df.groupby(['scenario_year', 'stringency']):
             matches = lookup_subset[
-                (lookup_subset['year'] == row['scenario_year']) &
-                (lookup_subset['stringency'] == row['scenario_type'])
+                (lookup_subset['year'] == year) &
+                (lookup_subset['stringency'] == stringency)
             ]
             
             if len(matches) == 0:
                 continue
             
-            # Handle country matching
-            country_list = str(row.get('country_iso2_list', '')).strip()
-            if not country_list or country_list == 'nan':
-                countries = ['GLOBAL']
-            else:
-                countries = [c.strip() for c in country_list.split(',') if c.strip()]
-            
-            # Get values for matching countries
-            country_values = []
-            for country in countries:
-                country_matches = matches[matches['iso2'] == country]
-                if len(country_matches) > 0:
-                    country_values.extend(country_matches[lookup_col].tolist())
-            
-            # Calculate median if we have values
-            if country_values:
-                median_val = np.median(country_values)
-                results.append((idx, median_val))
-        
-        if results:
-            indices, values = zip(*results)
-            return pd.Series(values, index=indices)
-        else:
-            return pd.Series(dtype=float)
-    
-    else:
-        # Regular direct matching (no technology override)
-        # Group by technology for efficient processing
-        results = []
-        
-        for tech, tech_group in missing_df.groupby('technology'):
-            tech_lookup = lookup_df[
-                (lookup_df['technology'] == tech) &
-                (lookup_df[lookup_col].notna())
-            ]
-            
-            if len(tech_lookup) == 0:
-                continue
-            
-            # For each row in this technology group
-            for idx, row in tech_group.iterrows():
-                matches = tech_lookup[
-                    (tech_lookup['year'] == row['scenario_year']) &
-                    (tech_lookup['stringency'] == row['scenario_type'])
-                ]
-                
-                if len(matches) == 0:
-                    continue
+            # Process each row in this year/stringency group
+            for idx in year_group.index:
+                row = year_group.loc[idx]
                 
                 # Handle country matching
                 country_list = str(row.get('country_iso2_list', '')).strip()
@@ -250,41 +254,193 @@ def direct_technology_match(missing_df: pd.DataFrame, lookup_df: pd.DataFrame,
             return pd.Series(values, index=indices)
         else:
             return pd.Series(dtype=float)
+    
+    else:
+        # Regular direct matching (no technology override)
+        # Group by technology for efficient processing
+        results = []
+        
+        for tech, tech_group in missing_df.groupby('technology'):
+            tech_lookup = lookup_df[
+                (lookup_df['technology'] == tech) &
+                (lookup_df[lookup_col].notna())
+            ]
+            
+            if len(tech_lookup) == 0:
+                continue
+            
+            # Group by year/stringency for efficiency
+            for (year, stringency), year_group in tech_group.groupby(['scenario_year', 'stringency']):
+                matches = tech_lookup[
+                    (tech_lookup['year'] == year) &
+                    (tech_lookup['stringency'] == stringency)
+                ]
+                
+                if len(matches) == 0:
+                    continue
+                
+                # Process each row in this year/stringency group
+                for idx in year_group.index:
+                    row = year_group.loc[idx]
+                    
+                    # Handle country matching
+                    country_list = str(row.get('country_iso2_list', '')).strip()
+                    if not country_list or country_list == 'nan':
+                        countries = ['GLOBAL']
+                    else:
+                        countries = [c.strip() for c in country_list.split(',') if c.strip()]
+                    
+                    # Get values for matching countries
+                    country_values = []
+                    for country in countries:
+                        country_matches = matches[matches['iso2'] == country]
+                        if len(country_matches) > 0:
+                            country_values.extend(country_matches[lookup_col].tolist())
+                    
+                    # Calculate median if we have values
+                    if country_values:
+                        median_val = np.median(country_values)
+                        results.append((idx, median_val))
+        
+        if results:
+            indices, values = zip(*results)
+            return pd.Series(values, index=indices)
+        else:
+            return pd.Series(dtype=float)
+
+
+def cross_fossil_fallback_vectorized(oil_techs_missing: pd.DataFrame, lookup_df: pd.DataFrame,
+                                   df_col: str, lookup_col: str) -> pd.Series:
+    """Vectorized cross-fossil fallback: Oil -> average of Coal+Gas within same CCS category."""
+    
+    if len(oil_techs_missing) == 0:
+        return pd.Series(dtype=float)
+    
+    # Technology mapping for Oil -> Coal+Gas fallbacks
+    tech_mapping = {
+        'OilCap - w/ CCS': ['CoalCap - w/ CCS', 'GasCap - w/ CCS'],
+        'OilCap - w/o CCS': ['CoalCap - w/o CCS', 'GasCap - w/o CCS'],
+        'OilCap': ['CoalCap', 'GasCap']
+    }
+    
+    results = []
+    
+    # Process each oil technology type separately for vectorization
+    for oil_tech, fallback_techs in tech_mapping.items():
+        oil_subset = oil_techs_missing[oil_techs_missing['technology'] == oil_tech]
+        if len(oil_subset) == 0:
+            continue
+        
+        # Get all potential matches for Coal and Gas technologies at once
+        fallback_lookup = lookup_df[
+            (lookup_df['technology'].isin(fallback_techs)) &
+            (lookup_df[lookup_col].notna())
+        ]
+        
+        if len(fallback_lookup) == 0:
+            continue
+        
+        # Group oil records by year/stringency for efficient processing
+        for (year, stringency), year_group in oil_subset.groupby(['scenario_year', 'stringency']):
+            # Get matching Coal+Gas entries for this year/stringency
+            year_stringency_matches = fallback_lookup[
+                (fallback_lookup['year'] == year) &
+                (fallback_lookup['stringency'] == stringency)
+            ]
+            
+            if len(year_stringency_matches) == 0:
+                continue
+            
+            # Process each oil record in this year/stringency group
+            for idx in year_group.index:
+                row = year_group.loc[idx]
+                
+                # Handle country matching
+                country_list = str(row.get('country_iso2_list', '')).strip()
+                if not country_list or country_list == 'nan':
+                    target_countries = ['GLOBAL']
+                else:
+                    target_countries = [c.strip() for c in country_list.split(',') if c.strip()]
+                
+                # Collect values from Coal and Gas for target countries
+                values_to_average = []
+                for country in target_countries:
+                    country_matches = year_stringency_matches[year_stringency_matches['iso2'] == country]
+                    if len(country_matches) > 0:
+                        values_to_average.extend(country_matches[lookup_col].tolist())
+                
+                # If no country match, try GLOBAL
+                if not values_to_average:
+                    global_matches = year_stringency_matches[year_stringency_matches['iso2'] == 'GLOBAL']
+                    if len(global_matches) > 0:
+                        values_to_average.extend(global_matches[lookup_col].tolist())
+                
+                # Calculate average if we have values from Coal/Gas
+                if values_to_average:
+                    avg_value = np.mean(values_to_average)
+                    results.append((idx, avg_value))
+    
+    if results:
+        indices, values = zip(*results)
+        return pd.Series(values, index=indices)
+    else:
+        return pd.Series(dtype=float)
 
 
 def global_fallback_match(missing_df: pd.DataFrame, lookup_df: pd.DataFrame, 
                          df_col: str, lookup_col: str) -> pd.Series:
-    """Global fallback matching using GLOBAL iso2 entries."""
-    
-    # Get global lookup data
-    global_lookup = lookup_df[
-        (lookup_df['iso2'] == 'GLOBAL') &
-        (lookup_df[lookup_col].notna())
-    ]
-    
-    if len(global_lookup) == 0:
-        return pd.Series(dtype=float)
+    """Global fallback matching using GLOBAL iso2 entries and UNKNOWN stringency fallbacks."""
     
     results = []
     
     # Group by technology for efficient processing
     for tech, tech_group in missing_df.groupby('technology'):
-        tech_global = global_lookup[global_lookup['technology'] == tech]
+        tech_lookup = lookup_df[
+            (lookup_df['technology'] == tech) &
+            (lookup_df[lookup_col].notna())
+        ]
         
-        if len(tech_global) == 0:
+        if len(tech_lookup) == 0:
             continue
         
-        # For each row in this technology group
-        for idx, row in tech_group.iterrows():
-            matches = tech_global[
-                (tech_global['year'] == row['scenario_year']) &
-                (tech_global['stringency'] == row['scenario_type'])
+        # Group by year/stringency for efficiency
+        for (year, stringency), year_group in tech_group.groupby(['scenario_year', 'stringency']):
+            
+            # Strategy 3a: Try GLOBAL geography with same stringency
+            global_matches = tech_lookup[
+                (tech_lookup['year'] == year) &
+                (tech_lookup['stringency'] == stringency) &
+                (tech_lookup['iso2'] == 'GLOBAL')
             ]
             
-            if len(matches) > 0:
-                # Take first available global value
-                global_val = matches[lookup_col].iloc[0]
-                results.append((idx, global_val))
+            if len(global_matches) > 0:
+                global_val = global_matches[lookup_col].iloc[0]
+                # Apply to all rows in this year/stringency group
+                for idx in year_group.index:
+                    results.append((idx, global_val))
+                continue
+            
+            # Strategy 3b: Try UNKNOWN stringency for each row individually
+            for idx in year_group.index:
+                row = year_group.loc[idx]
+                
+                country_list = str(row.get('country_iso2_list', '')).strip()
+                if not country_list or country_list == 'nan':
+                    target_countries = ['GLOBAL']
+                else:
+                    target_countries = [c.strip() for c in country_list.split(',') if c.strip()] + ['GLOBAL']
+                
+                for country in target_countries:
+                    unknown_matches = tech_lookup[
+                        (tech_lookup['year'] == year) &
+                        (tech_lookup['stringency'] == 'UNKNOWN') &
+                        (tech_lookup['iso2'] == country)
+                    ]
+                    
+                    if len(unknown_matches) > 0:
+                        unknown_val = unknown_matches[lookup_col].iloc[0]
+                        results.append((idx, unknown_val))
+                        break
     
     if results:
         indices, values = zip(*results)
@@ -306,7 +462,9 @@ def step4_gapfill_only() -> None:
     """Main step 4 function using ultra-fast gap-filling."""
     print_banner("STEP 4 — Ultra-Fast Gap-Fill with Technology Lookup")
     
+    print("📁 Loading input data...")
     df = pd.read_csv("3_final_AR6_target_schema.csv")
+    print(f"✅ Loaded {len(df):,} rows")
     
     # Load technology lookup table
     try:
