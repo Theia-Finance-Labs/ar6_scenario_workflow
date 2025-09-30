@@ -47,6 +47,7 @@ def identify_essential_columns():
         # Essential technical parameters
         'efficiency_decimal',
         'lifetime_years',
+        'scenario_capacity_factor',
         
         # Essential economic parameters  
         'capital_cost_usd_per_mw',

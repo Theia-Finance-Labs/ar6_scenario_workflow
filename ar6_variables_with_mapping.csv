@@ -1036,7 +1036,7 @@ Cumulative Capacity|Electricity|Gas|w/o CCS,Cumulative Capacity,Electricity,Gas,
 Efficiency|Electricity|Gas|w/o CCS,Efficiency,Electricity,Gas,w/o CCS,,Power,Gas,GasCap - w/o CCS,Gas,w/o CCS
 Final Energy|Transportation|Passenger|Other,Final Energy,Transportation,Passenger,Other,,Transportation,Passenger,Other,,
 Secondary Energy|Heat|Nuclear,Secondary Energy,Heat,Nuclear,,,Power,Nuclear,Nuclear - Heat,Nuclear,
-Price|Carbon,Price,Carbon,,,,,,,,
+Price|Carbon,Price,Carbon,,,,Economy,,,Carbon,
 Agricultural Demand|Crops|Energy|2nd generation,Agricultural Demand,Crops,Energy,2nd generation,,Agriculture,Crops,Energy - 2nd generation,,
 OM Cost|Fixed|Electricity|Biomass|w/ CCS,OM Cost,Fixed,Electricity,Biomass,w/ CCS,Power,Biomass,BiomassCap - w/ CCS,Biomass,w/ CCS
 Unemployment|Rate,Unemployment,Rate,,,,,,,,

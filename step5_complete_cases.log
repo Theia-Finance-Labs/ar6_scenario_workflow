@@ -1,0 +1,213 @@
+2025-09-30 14:17:54,990 - INFO - Starting complete cases filtering...
+2025-09-30 14:17:54,990 - INFO - Input file: 4_final_AR6_gapfilled_complete.csv
+2025-09-30 14:17:54,990 - INFO - Output file: 5_final_AR6_complete_cases.csv
+2025-09-30 14:17:54,990 - INFO - Reading input data...
+2025-09-30 14:17:58,951 - INFO - Input dataset shape: (2241967, 25)
+2025-09-30 14:17:58,951 - INFO - Essential columns defined: 15
+2025-09-30 14:17:58,951 - INFO - 
+=== COMPLETENESS ANALYSIS ===
+2025-09-30 14:17:58,951 - INFO - Checking completeness for essential columns...
+2025-09-30 14:17:59,017 - INFO -   scenario_provider: 0 missing values
+2025-09-30 14:17:59,081 - INFO -   scenario: 0 missing values
+2025-09-30 14:17:59,144 - INFO -   scenario_type: 0 missing values
+2025-09-30 14:17:59,207 - INFO -   scenario_geography: 0 missing values
+2025-09-30 14:17:59,271 - INFO -   sector: 0 missing values
+2025-09-30 14:17:59,334 - INFO -   technology: 0 missing values
+2025-09-30 14:17:59,396 - INFO -   technology_type: 0 missing values
+2025-09-30 14:17:59,398 - INFO -   scenario_year: 0 missing values
+2025-09-30 14:17:59,400 - INFO -   efficiency_decimal: 7,827 missing values
+2025-09-30 14:17:59,401 - INFO -   lifetime_years: 45,765 missing values
+2025-09-30 14:17:59,404 - INFO -   capital_cost_usd_per_mw: 0 missing values
+2025-09-30 14:17:59,407 - INFO -   om_cost_usd_per_mw_per_yr: 0 missing values
+2025-09-30 14:17:59,409 - INFO -   scenario_price: 0 missing values
+2025-09-30 14:17:59,411 - INFO -   scenario_pathway: 0 missing values
+2025-09-30 14:17:59,413 - INFO -   fuel_price: 18,521 missing values
+2025-09-30 14:17:59,413 - INFO - Handling fuel price exceptions for green technologies...
+2025-09-30 14:17:59,433 - INFO -   Allowed 0 green technology cases with missing fuel prices
+2025-09-30 14:17:59,725 - INFO - Adding EBITDA_check column...
+2025-09-30 14:17:59,733 - INFO -   EBITDA_check FALSE cases: 946,462 (43.11%)
+2025-09-30 14:17:59,733 - INFO - 
+=== EBITDA CHECK ANALYSIS ===
+2025-09-30 14:17:59,807 - INFO - Total FALSE cases: 946,462
+2025-09-30 14:17:59,808 - INFO - 
+--- FALSE Cases by Sector ---
+2025-09-30 14:18:00,074 - INFO -   Power: 946,462/2,195,517 (43.1%)
+2025-09-30 14:18:00,074 - INFO - 
+--- FALSE Cases by Technology (Top 10) ---
+2025-09-30 14:18:00,155 - INFO -   OilCap: 82,881/131,814 (62.9%)
+2025-09-30 14:18:00,211 - INFO -   BiomassCap - w/ CCS: 76,311/123,605 (61.7%)
+2025-09-30 14:18:00,269 - INFO -   OilCap - w/o CCS: 75,377/122,766 (61.4%)
+2025-09-30 14:18:00,324 - INFO -   GasCap - w/ CCS: 74,095/126,243 (58.7%)
+2025-09-30 14:18:00,374 - INFO -   OilCap - w/ CCS: 74,027/81,642 (90.7%)
+2025-09-30 14:18:00,429 - INFO -   CoalCap - w/ CCS: 67,029/125,953 (53.2%)
+2025-09-30 14:18:00,483 - INFO -   BiomassCap: 52,717/133,354 (39.5%)
+2025-09-30 14:18:00,536 - INFO -   BiomassCap - w/o CCS: 50,514/127,802 (39.5%)
+2025-09-30 14:18:00,613 - INFO -   CoalCap - w/o CCS: 49,717/130,369 (38.1%)
+2025-09-30 14:18:00,665 - INFO -   CoalCap: 48,437/133,115 (36.4%)
+2025-09-30 14:18:00,665 - INFO - 
+--- FALSE Cases by Scenario (Top 10) ---
+2025-09-30 14:18:00,726 - INFO -   EN_NPi2100: 6,295/17,928 (35.1%)
+2025-09-30 14:18:00,764 - INFO -   EN_NPi2020_800: 6,247/18,107 (34.5%)
+2025-09-30 14:18:00,800 - INFO -   EN_INDCi2100: 6,236/18,402 (33.9%)
+2025-09-30 14:18:00,836 - INFO -   CO_BAU: 6,128/13,642 (44.9%)
+2025-09-30 14:18:00,872 - INFO -   CO_CurPol: 5,956/13,415 (44.4%)
+2025-09-30 14:18:00,911 - INFO -   EN_NPi2020_800f: 5,913/18,147 (32.6%)
+2025-09-30 14:18:00,949 - INFO -   EN_INDCi2030_1400: 5,884/18,192 (32.3%)
+2025-09-30 14:18:00,987 - INFO -   EN_INDCi2030_1000f: 5,883/18,159 (32.4%)
+2025-09-30 14:18:01,025 - INFO -   EN_INDCi2030_1400f: 5,881/18,192 (32.3%)
+2025-09-30 14:18:01,066 - INFO -   EN_NPi2020_1400: 5,836/18,240 (32.0%)
+2025-09-30 14:18:01,066 - INFO - 
+--- Statistical Analysis of FALSE Cases ---
+2025-09-30 14:18:01,066 - INFO - O&M Cost Statistics:
+2025-09-30 14:18:01,067 - INFO -   Mean: $68,818
+2025-09-30 14:18:01,076 - INFO -   Median: $51,005
+2025-09-30 14:18:01,077 - INFO -   Max: $497,148
+2025-09-30 14:18:01,077 - INFO - Annual Revenue Statistics:
+2025-09-30 14:18:01,079 - INFO -   Mean: $18,840
+2025-09-30 14:18:01,084 - INFO -   Median: $0
+2025-09-30 14:18:01,085 - INFO -   Min: $0
+2025-09-30 14:18:01,085 - INFO - 
+--- Common Patterns in FALSE Cases ---
+2025-09-30 14:18:01,110 - INFO -   Cases with capacity factor < 10%: 185,256
+2025-09-30 14:18:01,122 - INFO -   Cases with price < $50/MWh: 127,883
+2025-09-30 14:18:01,140 - INFO -   Cases with O&M > $100k/MW/yr: 180,741
+2025-09-30 14:18:01,173 - INFO - 
+=== FILTERING RESULTS ===
+2025-09-30 14:18:01,173 - INFO - Original rows: 2,241,967
+2025-09-30 14:18:01,173 - INFO - Complete cases: 2,195,517
+2025-09-30 14:18:01,173 - INFO - Rows removed: 46,450
+2025-09-30 14:18:01,173 - INFO - Retention rate: 97.93%
+2025-09-30 14:18:01,173 - INFO - 
+=== RETENTION BY SECTOR ===
+2025-09-30 14:18:01,272 - INFO -   Coal: 0/4,654 (0.0%)
+2025-09-30 14:18:01,347 - INFO -   Gas&Oil: 0/13,867 (0.0%)
+2025-09-30 14:18:01,910 - INFO -   Power: 2,195,517/2,223,446 (98.7%)
+2025-09-30 14:18:01,911 - INFO - 
+=== TECHNOLOGIES WITH LOW RETENTION (<90%) ===
+2025-09-30 14:18:02,325 - INFO -   Coal - Liquids - w/ CCS: 0/437 (0.0%)
+2025-09-30 14:18:02,393 - INFO -   Coal - Liquids - w/o CCS: 0/422 (0.0%)
+2025-09-30 14:18:02,462 - INFO -   Coal - w/o CCS: 0/3,795 (0.0%)
+2025-09-30 14:18:02,847 - INFO -   Gas - w/ CCS: 0/2,492 (0.0%)
+2025-09-30 14:18:02,918 - INFO -   Gas - w/o CCS: 0/4,175 (0.0%)
+2025-09-30 14:18:03,707 - INFO -   Oil: 0/7,200 (0.0%)
+2025-09-30 14:18:04,097 - INFO -   SolarCap - CSP: 37,969/50,501 (75.2%)
+2025-09-30 14:18:04,189 - INFO -   SolarCap - PV: 52,516/67,913 (77.3%)
+2025-09-30 14:18:04,381 - INFO - 
+Saving complete cases to: 5_final_AR6_complete_cases.csv
+2025-09-30 14:18:17,084 - INFO - Complete cases filtering completed successfully!
+2025-09-30 14:32:39,239 - INFO - Starting complete cases filtering...
+2025-09-30 14:32:39,240 - INFO - Input file: 4_final_AR6_gapfilled_complete.csv
+2025-09-30 14:32:39,240 - INFO - Output file: 5_final_AR6_complete_cases.csv
+2025-09-30 14:32:39,240 - INFO - Reading input data...
+2025-09-30 14:32:43,159 - INFO - Input dataset shape: (2241967, 25)
+2025-09-30 14:32:43,159 - INFO - Essential columns defined: 16
+2025-09-30 14:32:43,159 - INFO - 
+=== COMPLETENESS ANALYSIS ===
+2025-09-30 14:32:43,159 - INFO - Checking completeness for essential columns...
+2025-09-30 14:32:43,223 - INFO -   scenario_provider: 0 missing values
+2025-09-30 14:32:43,286 - INFO -   scenario: 0 missing values
+2025-09-30 14:32:43,349 - INFO -   scenario_type: 0 missing values
+2025-09-30 14:32:43,413 - INFO -   scenario_geography: 0 missing values
+2025-09-30 14:32:43,476 - INFO -   sector: 0 missing values
+2025-09-30 14:32:43,539 - INFO -   technology: 0 missing values
+2025-09-30 14:32:43,601 - INFO -   technology_type: 0 missing values
+2025-09-30 14:32:43,603 - INFO -   scenario_year: 0 missing values
+2025-09-30 14:32:43,604 - INFO -   efficiency_decimal: 7,827 missing values
+2025-09-30 14:32:43,606 - INFO -   lifetime_years: 45,765 missing values
+2025-09-30 14:32:43,608 - INFO -   scenario_capacity_factor: 754,073 missing values
+2025-09-30 14:32:43,609 - INFO -   capital_cost_usd_per_mw: 0 missing values
+2025-09-30 14:32:43,610 - INFO -   om_cost_usd_per_mw_per_yr: 0 missing values
+2025-09-30 14:32:43,612 - INFO -   scenario_price: 0 missing values
+2025-09-30 14:32:43,614 - INFO -   scenario_pathway: 0 missing values
+2025-09-30 14:32:43,616 - INFO -   fuel_price: 18,521 missing values
+2025-09-30 14:32:43,616 - INFO - Handling fuel price exceptions for green technologies...
+2025-09-30 14:32:43,637 - INFO -   Allowed 0 green technology cases with missing fuel prices
+2025-09-30 14:32:43,813 - INFO - Adding EBITDA_check column...
+2025-09-30 14:32:43,818 - INFO -   EBITDA_check FALSE cases: 210,998 (14.45%)
+2025-09-30 14:32:43,818 - INFO - 
+=== EBITDA CHECK ANALYSIS ===
+2025-09-30 14:32:43,834 - INFO - Total FALSE cases: 210,998
+2025-09-30 14:32:43,834 - INFO - 
+--- FALSE Cases by Sector ---
+2025-09-30 14:32:43,972 - INFO -   Power: 210,998/1,460,053 (14.5%)
+2025-09-30 14:32:43,972 - INFO - 
+--- FALSE Cases by Technology (Top 10) ---
+2025-09-30 14:32:44,011 - INFO -   OilCap - w/o CCS: 31,189/78,578 (39.7%)
+2025-09-30 14:32:44,045 - INFO -   OilCap: 29,068/78,001 (37.3%)
+2025-09-30 14:32:44,080 - INFO -   CoalCap - w/o CCS: 22,770/103,422 (22.0%)
+2025-09-30 14:32:44,114 - INFO -   GasCap - w/ CCS: 21,939/74,087 (29.6%)
+2025-09-30 14:32:44,148 - INFO -   CoalCap: 14,864/99,542 (14.9%)
+2025-09-30 14:32:44,181 - INFO -   BiomassCap - w/ CCS: 14,711/62,005 (23.7%)
+2025-09-30 14:32:44,215 - INFO -   BiomassCap - w/o CCS: 11,447/88,735 (12.9%)
+2025-09-30 14:32:44,252 - INFO -   GasCap - w/o CCS: 9,282/105,723 (8.8%)
+2025-09-30 14:32:44,286 - INFO -   CoalCap - w/ CCS: 9,118/68,042 (13.4%)
+2025-09-30 14:32:44,316 - INFO -   OilCap - w/ CCS: 9,076/16,691 (54.4%)
+2025-09-30 14:32:44,316 - INFO - 
+--- FALSE Cases by Scenario (Top 10) ---
+2025-09-30 14:32:44,359 - INFO -   EN_NPi2020_800: 2,583/14,443 (17.9%)
+2025-09-30 14:32:44,389 - INFO -   EN_INDCi2030_1000: 2,380/13,030 (18.3%)
+2025-09-30 14:32:44,443 - INFO -   EN_NPi2020_1000: 2,249/14,679 (15.3%)
+2025-09-30 14:32:44,470 - INFO -   EN_NPi2020_600f: 2,234/13,562 (16.5%)
+2025-09-30 14:32:44,495 - INFO -   EN_INDCi2030_1000f: 2,227/14,503 (15.4%)
+2025-09-30 14:32:44,520 - INFO -   EN_NPi2020_800f: 2,217/14,451 (15.3%)
+2025-09-30 14:32:44,546 - INFO -   EN_NPi2020_500: 2,212/9,617 (23.0%)
+2025-09-30 14:32:44,571 - INFO -   EN_INDCi2030_1000_NDCp: 2,150/10,919 (19.7%)
+2025-09-30 14:32:44,595 - INFO -   EN_INDCi2030_1400: 2,149/14,457 (14.9%)
+2025-09-30 14:32:44,620 - INFO -   EN_INDCi2030_1400f: 2,133/14,444 (14.8%)
+2025-09-30 14:32:44,620 - INFO - 
+--- Statistical Analysis of FALSE Cases ---
+2025-09-30 14:32:44,620 - INFO - O&M Cost Statistics:
+2025-09-30 14:32:44,620 - INFO -   Mean: $75,922
+2025-09-30 14:32:44,624 - INFO -   Median: $51,188
+2025-09-30 14:32:44,624 - INFO -   Max: $497,148
+2025-09-30 14:32:44,624 - INFO - Annual Revenue Statistics:
+2025-09-30 14:32:44,624 - INFO -   Mean: $18,840
+2025-09-30 14:32:44,625 - INFO -   Median: $0
+2025-09-30 14:32:44,625 - INFO -   Min: $0
+2025-09-30 14:32:44,625 - INFO - 
+--- Common Patterns in FALSE Cases ---
+2025-09-30 14:32:44,640 - INFO -   Cases with capacity factor < 10%: 185,256
+2025-09-30 14:32:44,644 - INFO -   Cases with price < $50/MWh: 51,792
+2025-09-30 14:32:44,647 - INFO -   Cases with O&M > $100k/MW/yr: 41,789
+2025-09-30 14:32:44,659 - INFO - 
+=== FILTERING RESULTS ===
+2025-09-30 14:32:44,659 - INFO - Original rows: 2,241,967
+2025-09-30 14:32:44,659 - INFO - Complete cases: 1,460,053
+2025-09-30 14:32:44,659 - INFO - Rows removed: 781,914
+2025-09-30 14:32:44,659 - INFO - Retention rate: 65.12%
+2025-09-30 14:32:44,659 - INFO - 
+=== RETENTION BY SECTOR ===
+2025-09-30 14:32:44,746 - INFO -   Coal: 0/4,654 (0.0%)
+2025-09-30 14:32:44,807 - INFO -   Gas&Oil: 0/13,867 (0.0%)
+2025-09-30 14:32:45,170 - INFO -   Power: 1,460,053/2,223,446 (65.7%)
+2025-09-30 14:32:45,170 - INFO - 
+=== TECHNOLOGIES WITH LOW RETENTION (<90%) ===
+2025-09-30 14:32:45,302 - INFO -   BiomassCap: 89,259/133,354 (66.9%)
+2025-09-30 14:32:45,416 - INFO -   BiomassCap - w/ CCS: 62,005/123,605 (50.2%)
+2025-09-30 14:32:45,552 - INFO -   BiomassCap - w/o CCS: 88,735/127,802 (69.4%)
+2025-09-30 14:32:45,639 - INFO -   Coal - Liquids - w/ CCS: 0/437 (0.0%)
+2025-09-30 14:32:45,740 - INFO -   Coal - Liquids - w/o CCS: 0/422 (0.0%)
+2025-09-30 14:32:45,823 - INFO -   Coal - w/o CCS: 0/3,795 (0.0%)
+2025-09-30 14:32:45,988 - INFO -   CoalCap: 99,542/133,115 (74.8%)
+2025-09-30 14:32:46,147 - INFO -   CoalCap - w/ CCS: 68,042/125,953 (54.0%)
+2025-09-30 14:32:46,303 - INFO -   CoalCap - w/o CCS: 103,422/130,369 (79.3%)
+2025-09-30 14:32:46,374 - INFO -   Gas - w/ CCS: 0/2,492 (0.0%)
+2025-09-30 14:32:46,435 - INFO -   Gas - w/o CCS: 0/4,175 (0.0%)
+2025-09-30 14:32:46,528 - INFO -   GasCap: 99,809/133,612 (74.7%)
+2025-09-30 14:32:46,613 - INFO -   GasCap - w/ CCS: 74,087/126,243 (58.7%)
+2025-09-30 14:32:46,703 - INFO -   GasCap - w/o CCS: 105,723/130,960 (80.7%)
+2025-09-30 14:32:46,783 - INFO -   GeothermalCap: 61,025/94,298 (64.7%)
+2025-09-30 14:32:46,871 - INFO -   HydroCap: 106,771/137,291 (77.8%)
+2025-09-30 14:32:46,947 - INFO -   Hydrogen: 21,412/64,505 (33.2%)
+2025-09-30 14:32:47,036 - INFO -   NuclearCap: 103,192/137,361 (75.1%)
+2025-09-30 14:32:47,094 - INFO -   Oil: 0/7,200 (0.0%)
+2025-09-30 14:32:47,180 - INFO -   OilCap: 78,001/131,814 (59.2%)
+2025-09-30 14:32:47,253 - INFO -   OilCap - w/ CCS: 16,691/81,642 (20.4%)
+2025-09-30 14:32:47,342 - INFO -   OilCap - w/o CCS: 78,578/122,766 (64.0%)
+2025-09-30 14:32:47,413 - INFO -   SolarCap - CSP: 37,969/50,501 (75.2%)
+2025-09-30 14:32:47,491 - INFO -   SolarCap - PV: 52,516/67,913 (77.3%)
+2025-09-30 14:32:47,566 - INFO -   WindCap - Offshore: 44,829/81,487 (55.0%)
+2025-09-30 14:32:47,652 - INFO -   WindCap - Onshore: 68,445/88,855 (77.0%)
+2025-09-30 14:32:47,652 - INFO - 
+Saving complete cases to: 5_final_AR6_complete_cases.csv
+2025-09-30 14:32:56,178 - INFO - Complete cases filtering completed successfully!

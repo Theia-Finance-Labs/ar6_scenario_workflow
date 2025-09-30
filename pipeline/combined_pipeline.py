@@ -177,6 +177,7 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
         "Coal",
         "Renewables",
         "Power",
+        "Economy",
     ]
     before_filter = len(base_data)
     base_data = base_data[base_data["Sector"].isin(target_sectors)].copy()

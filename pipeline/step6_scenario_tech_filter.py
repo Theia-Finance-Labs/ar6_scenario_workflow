@@ -101,15 +101,15 @@ def check_scenario_tech_compliance(df, scenario, power_technologies):
         'compliant_tech_count': len(compliant_techs)
     }
 
-def filter_viable_scenarios(input_file, output_file):
+def flag_viable_scenarios(input_file, output_file):
     """
-    Main function to filter scenarios by technology EBITDA compliance.
+    Main function to flag scenarios by technology EBITDA compliance instead of filtering.
     
     Args:
         input_file (str): Path to input CSV file
         output_file (str): Path to output CSV file
     """
-    logging.info(f"Starting scenario technology filtering...")
+    logging.info(f"Starting scenario technology flagging...")
     logging.info(f"Input file: {input_file}")
     logging.info(f"Output file: {output_file}")
     
@@ -131,6 +131,7 @@ def filter_viable_scenarios(input_file, output_file):
     # Check each scenario's compliance
     logging.info("\n=== EVALUATING SCENARIO COMPLIANCE ===")
     viable_scenarios = []
+    scenario_compliance_map = {}
     scenario_analysis = []
     
     for i, scenario in enumerate(scenarios):
@@ -140,20 +141,25 @@ def filter_viable_scenarios(input_file, output_file):
         compliance_result = check_scenario_tech_compliance(df, scenario, power_technologies)
         scenario_analysis.append(compliance_result)
         
+        # Store compliance status for this scenario
+        scenario_compliance_map[scenario] = compliance_result['all_techs_compliant']
+        
         if compliance_result['all_techs_compliant']:
             viable_scenarios.append(scenario)
     
-    logging.info(f"\n=== FILTERING RESULTS ===")
+    logging.info(f"\n=== FLAGGING RESULTS ===")
     logging.info(f"Scenarios evaluated: {len(scenarios):,}")
     logging.info(f"Viable scenarios found: {len(viable_scenarios):,}")
-    logging.info(f"Rejection rate: {(len(scenarios) - len(viable_scenarios))/len(scenarios)*100:.1f}%")
+    logging.info(f"Non-viable scenarios: {len(scenarios) - len(viable_scenarios):,}")
+    logging.info(f"Non-viable rate: {(len(scenarios) - len(viable_scenarios))/len(scenarios)*100:.1f}%")
     
-    # Filter dataset to viable scenarios only
-    viable_df = df[df['scenario'].isin(viable_scenarios)].copy()
+    # Add scenario_viable flag to all records instead of filtering
+    df['scenario_viable'] = df['scenario'].map(scenario_compliance_map)
     
     logging.info(f"Original dataset rows: {len(df):,}")
-    logging.info(f"Filtered dataset rows: {len(viable_df):,}")
-    logging.info(f"Data retention rate: {len(viable_df)/len(df)*100:.1f}%")
+    logging.info(f"Flagged viable rows: {df['scenario_viable'].sum():,}")
+    logging.info(f"Flagged non-viable rows: {(~df['scenario_viable']).sum():,}")
+    logging.info(f"Viable data percentage: {df['scenario_viable'].sum()/len(df)*100:.1f}%")
     
     # Analyze non-viable scenarios
     logging.info(f"\n=== NON-VIABLE SCENARIO ANALYSIS ===")
@@ -169,7 +175,7 @@ def filter_viable_scenarios(input_file, output_file):
                     if tech_data['present'] and not tech_data['has_passing_year']:
                         tech_failure_counts[tech] = tech_failure_counts.get(tech, 0) + 1
         
-        logging.info("Technologies causing scenario rejection (Top 10):")
+        logging.info("Technologies causing scenario non-viability (Top 10):")
         sorted_failures = sorted(tech_failure_counts.items(), key=lambda x: x[1], reverse=True)
         for tech, count in sorted_failures[:10]:
             pct = count / len(non_viable_analysis) * 100
@@ -196,18 +202,21 @@ def filter_viable_scenarios(input_file, output_file):
             pct = count / len(viable_scenarios) * 100
             logging.info(f"  {tech}: {count:,}/{len(viable_scenarios):,} scenarios ({pct:.1f}%)")
     
-    # Save filtered dataset
-    logging.info(f"\nSaving viable scenarios to: {output_file}")
-    viable_df.to_csv(output_file, index=False)
+    # Save ALL data with viability flag instead of filtering
+    logging.info(f"\nSaving all scenarios with viability flag to: {output_file}")
+    df.to_csv(output_file, index=False)
     
     # Final summary
     logging.info(f"\n=== FINAL SUMMARY ===")
+    logging.info(f"Total scenarios: {len(scenarios):,}")
     logging.info(f"Viable scenarios: {len(viable_scenarios):,}")
-    logging.info(f"Total rows retained: {len(viable_df):,}")
-    logging.info(f"Power technologies required: {len(power_technologies):,}")
-    logging.info("Filtering completed successfully!")
+    logging.info(f"Non-viable scenarios: {len(scenarios) - len(viable_scenarios):,}")
+    logging.info(f"Total rows in output: {len(df):,}")
+    logging.info(f"Rows flagged as viable: {df['scenario_viable'].sum():,}")
+    logging.info(f"Power technologies evaluated: {len(power_technologies):,}")
+    logging.info("Scenario flagging completed successfully!")
     
-    return viable_df, viable_scenarios
+    return df, viable_scenarios
 
 def main():
     """Main execution function."""
@@ -220,22 +229,24 @@ def main():
         logging.error(f"Input file not found: {input_file}")
         return
     
-    # Run filtering
+    # Run flagging
     try:
-        result_df, viable_scenarios = filter_viable_scenarios(input_file, output_file)
+        result_df, viable_scenarios = flag_viable_scenarios(input_file, output_file)
         
         # Final summary
         print(f"\n{'='*60}")
-        print(f"SCENARIO TECHNOLOGY FILTERING SUMMARY")
+        print(f"SCENARIO TECHNOLOGY FLAGGING SUMMARY")
         print(f"{'='*60}")
         print(f"Input file: {input_file}")
         print(f"Output file: {output_file}")
+        print(f"Total scenarios: {result_df['scenario'].nunique():,}")
         print(f"Viable scenarios: {len(viable_scenarios):,}")
-        print(f"Filtered dataset rows: {len(result_df):,}")
+        print(f"Output dataset rows: {len(result_df):,}")
+        print(f"Viable data rows: {result_df['scenario_viable'].sum():,}")
         print(f"Log file: step6_scenario_tech_filter.log")
         
     except Exception as e:
-        logging.error(f"Error during filtering: {str(e)}")
+        logging.error(f"Error during flagging: {str(e)}")
         raise
 
 if __name__ == "__main__":
