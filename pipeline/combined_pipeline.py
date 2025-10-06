@@ -920,6 +920,8 @@ def _normalize_fuel_label(label: str) -> str:
     s = str(label).strip().lower()
     if not s or s == "nan":
         return ""
+    if "storage" in s:
+        return "Electricity"  # Storage technologies use electricity
     if "electric" in s:
         return "Electricity"
     if "gas" in s or "gases" in s:
@@ -944,10 +946,24 @@ def _normalize_fuel_label(label: str) -> str:
 
 
 def build_price_tables(step1_df: Optional[pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+    """
+    Build structured price tables from raw AR6 price data.
+    
+    Returns 4 price tables:
+    - elec: Electricity prices (secondary energy) → Power sector revenue
+    - primary: General primary energy prices → Currently unused
+    - primary_by_fuel: Primary energy by fuel type → All sectors' input costs
+    - secondary_by_fuel: Secondary energy by fuel type → Non-Power sectors' revenue
+    
+    Economic interpretation:
+    - Primary prices: Raw material costs (coal, gas, oil, biomass)
+    - Secondary prices: Processed product prices (electricity, refined fuels)
+    """
     if step1_df is None:
         return {
             "elec": pd.DataFrame(),
             "primary": pd.DataFrame(),
+            "primary_by_fuel": pd.DataFrame(),
             "secondary_by_fuel": pd.DataFrame(),
         }
 
@@ -956,6 +972,7 @@ def build_price_tables(step1_df: Optional[pd.DataFrame]) -> Dict[str, pd.DataFra
         return {
             "elec": pd.DataFrame(),
             "primary": pd.DataFrame(),
+            "primary_by_fuel": pd.DataFrame(),
             "secondary_by_fuel": pd.DataFrame(),
         }
 
@@ -992,6 +1009,14 @@ def build_price_tables(step1_df: Optional[pd.DataFrame]) -> Dict[str, pd.DataFra
         "price_usd_per_mwh"
     ].first()
 
+    # Primary energy by fuel (fuel-specific table for fuel_price)
+    primary_by_fuel = prices[(prices["col2"] == "Primary Energy")][
+        ["model", "scenario", "region", "year", "Fuel_norm", "price_usd_per_mwh"]
+    ].copy()
+    primary_by_fuel = primary_by_fuel.groupby(
+        ["model", "scenario", "region", "year", "Fuel_norm"], as_index=False
+    )["price_usd_per_mwh"].first()
+
     # Secondary energy by fuel (fuel-specific table)
     secondary_by_fuel = prices[(prices["col2"] == "Secondary Energy")][
         ["model", "scenario", "region", "year", "Fuel_norm", "price_usd_per_mwh"]
@@ -1000,7 +1025,7 @@ def build_price_tables(step1_df: Optional[pd.DataFrame]) -> Dict[str, pd.DataFra
         ["model", "scenario", "region", "year", "Fuel_norm"], as_index=False
     )["price_usd_per_mwh"].first()
 
-    return {"elec": elec, "primary": primary, "secondary_by_fuel": secondary_by_fuel}
+    return {"elec": elec, "primary": primary, "primary_by_fuel": primary_by_fuel, "secondary_by_fuel": secondary_by_fuel}
 
 
 def step3_finalize_target_schema() -> None:
@@ -1058,13 +1083,35 @@ def step3_finalize_target_schema() -> None:
     target["price_unit"] = "USD/MWh"
     target["price_indicator"] = np.nan
 
-    # scenario_price / fuel_price using step1 original (vectorized merges)
+    # ========================================================================
+    # PRICING LOGIC OVERVIEW
+    # ========================================================================
+    # This section assigns two key price fields to each technology:
+    #
+    # 1. scenario_price (REVENUE - what firms sell their output for):
+    #    - Power/Renewables: electricity prices (secondary energy)
+    #    - Coal/Gas&Oil: processed fuel prices (secondary energy by fuel type)
+    #
+    # 2. fuel_price (COSTS - what firms pay for input fuels):
+    #    - All sectors: raw material prices (primary energy by fuel type)
+    #    - Renewables: 0 (no fuel consumption)
+    #
+    # Economic Logic:
+    # - Revenue > Costs creates realistic profit margins
+    # - Secondary prices > Primary prices reflects value-added processing
+    # ========================================================================
+
+    # Load price data from step1 and create structured price tables
     step1_df = load_step1_for_price()
     price_tables = build_price_tables(step1_df)
 
-    # Build keys for joins
+    # Build keys for joins across all price merges
     join_key = ["scenario_provider", "scenario", "scenario_geography", "scenario_year"]
-    # Prepare price tables with matching column names
+    
+    # ========================================================================
+    # PREPARE PRICE TABLES WITH CONSISTENT COLUMN NAMES
+    # ========================================================================
+    # Table 1: Electricity prices (secondary energy) for Power sector revenue
     elec = (
         price_tables["elec"].rename(
             columns={
@@ -1079,6 +1126,7 @@ def step3_finalize_target_schema() -> None:
         else pd.DataFrame(columns=join_key + ["scenario_price_electricity"])
     )
 
+    # Table 2: Primary energy prices (general) - currently unused but kept for compatibility
     primary = (
         price_tables["primary"].rename(
             columns={
@@ -1093,8 +1141,9 @@ def step3_finalize_target_schema() -> None:
         else pd.DataFrame(columns=join_key + ["scenario_price_primary"])
     )
 
-    sec_by_fuel = (
-        price_tables["secondary_by_fuel"].rename(
+    # Table 3: Primary energy prices by fuel (for fuel_price - input costs)
+    primary_by_fuel = (
+        price_tables["primary_by_fuel"].rename(
             columns={
                 "model": "scenario_provider",
                 "scenario": "scenario",
@@ -1104,13 +1153,46 @@ def step3_finalize_target_schema() -> None:
                 "price_usd_per_mwh": "fuel_price",
             }
         )
-        if not price_tables["secondary_by_fuel"].empty
-        else pd.DataFrame(columns=join_key + ["fuel_for_price", "fuel_price"])
+        if not price_tables["primary_by_fuel"].empty
+        else pd.DataFrame(columns=join_key + ["fuel_for_price_norm", "fuel_price"])
     )
 
-    # scenario_price: Power/Renewables -> electricity; others -> primary
+    # ========================================================================
+    # ASSIGN SCENARIO_PRICE (REVENUE) BY SECTOR
+    # ========================================================================
+    # Power/Renewables: Get electricity prices (what they sell)
+    # Coal/Gas&Oil: Get processed fuel prices (what they sell)
+    
+    # Step 1: Merge electricity prices for Power sector
     target = target.merge(elec, on=join_key, how="left")
-    target = target.merge(primary, on=join_key, how="left")
+    
+    # Step 2: Prepare secondary energy prices by fuel for non-Power sectors
+    # Table 4: Secondary energy prices by fuel (for non-Power sector revenue)
+    sec_by_fuel_for_scenario = (
+        price_tables["secondary_by_fuel"].rename(
+            columns={
+                "model": "scenario_provider",
+                "scenario": "scenario",
+                "region": "scenario_geography",
+                "year": "scenario_year",
+                "Fuel_norm": "fuel_for_scenario_norm",
+                "price_usd_per_mwh": "scenario_price_secondary",
+            }
+        )
+        if not price_tables["secondary_by_fuel"].empty
+        else pd.DataFrame(columns=join_key + ["fuel_for_scenario_norm", "scenario_price_secondary"])
+    )
+    
+    # Step 3: Merge secondary energy prices by fuel type for Coal/Gas&Oil sectors
+    target["fuel_for_scenario_norm"] = target["Fuel"].apply(_normalize_fuel_label)
+    target = target.merge(
+        sec_by_fuel_for_scenario, 
+        on=join_key + ["fuel_for_scenario_norm"], 
+        how="left"
+    )
+    target = target.drop(columns=["fuel_for_scenario_norm"], errors="ignore")
+    
+    # Step 4: Assign scenario_price based on sector type
     is_power_like = (
         target["sector"].isin(["Power", "Renewables"])
         if "sector" in target.columns
@@ -1118,28 +1200,36 @@ def step3_finalize_target_schema() -> None:
     )
     target["scenario_price"] = np.where(
         is_power_like,
-        target["scenario_price_electricity"],
-        target["scenario_price_primary"],
+        target["scenario_price_electricity"],    # Power: electricity prices
+        target["scenario_price_secondary"],      # Others: processed fuel prices
     )
+    
+    # Clean up temporary columns
     target = target.drop(
-        columns=["scenario_price_electricity", "scenario_price_primary"],
+        columns=["scenario_price_electricity", "scenario_price_secondary"],
         errors="ignore",
     )
 
-    # fuel_price: technology → fuel mapping then merge with secondary-by-fuel prices
+    # ========================================================================
+    # ASSIGN FUEL_PRICE (INPUT COSTS) FOR ALL SECTORS
+    # ========================================================================
+    # All sectors get primary energy prices (raw material costs)
+    # Renewables get fuel_price = 0 (no fuel consumption)
+    
+    # Step 1: Map technology fuel types to primary energy prices
     target["fuel_for_price"] = target["Fuel"]
-    target["fuel_for_price_norm"] = target["fuel_for_price"].apply(
-        _normalize_fuel_label
-    )
+    target["fuel_for_price_norm"] = target["fuel_for_price"].apply(_normalize_fuel_label)
+    
+    # Step 2: Merge primary energy prices by fuel type (input costs for all sectors)
     target = target.merge(
-        sec_by_fuel, on=join_key + ["fuel_for_price_norm"], how="left"
+        primary_by_fuel, on=join_key + ["fuel_for_price_norm"], how="left"
     )
     target = target.drop(columns=["fuel_for_price_norm"], errors="ignore")
 
-    # Set fuel_price to 0 for renewable technologies (they don't consume fuel)
+    # Step 3: Override fuel_price to 0 for renewable technologies (no fuel consumption)
     renewable_tech_keywords = [
         "Solar",
-        "Wind",
+        "Wind", 
         "Hydro",
         "Geothermal",
         "Nuclear",
@@ -1153,11 +1243,19 @@ def step3_finalize_target_schema() -> None:
         .apply(lambda x: any(keyword in x for keyword in renewable_tech_keywords))
     )
 
-    # Set fuel price to 0 for renewables (free fuel)
     target.loc[is_renewable_tech, "fuel_price"] = 0.0
     print(
         f"Set fuel_price=0 for {is_renewable_tech.sum()} renewable technology entries"
     )
+    
+    # ========================================================================
+    # PRICING ASSIGNMENT COMPLETE
+    # ========================================================================
+    # Final result:
+    # - scenario_price: Revenue from selling output (secondary energy prices)
+    # - fuel_price: Cost of input fuels (primary energy prices, 0 for renewables)
+    # - Economic margin: scenario_price - fuel_price = processing value added
+    # ========================================================================
 
     # Pathway logic (Power/Renewables vs Coal/Gas&Oil)
     # Determine pathway_unit and scenario_pathway from df columns (vectorized)
