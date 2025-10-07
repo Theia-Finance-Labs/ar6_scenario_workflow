@@ -1257,6 +1257,66 @@ def step3_finalize_target_schema() -> None:
     # - Economic margin: scenario_price - fuel_price = processing value added
     # ========================================================================
 
+    # ========================================================================
+    # CALCULATE FUEL INTENSITY
+    # ========================================================================
+    # Fuel intensity = Primary Energy / Secondary Energy
+    # Represents conversion efficiency from primary fuel to secondary output
+    # Example: GasCap fuel_intensity = Primary Energy|Gas|Electricity / Secondary Energy|Electricity|Gas
+    
+    print("🔥 Calculating fuel intensity (Primary Energy / Secondary Energy)...")
+    
+    # Initialize fuel_intensity column
+    target["fuel_intensity"] = np.nan
+    
+    # Calculate fuel intensity where both primary and secondary energy data exist
+    if "primary_energy_mwh_per_yr" in df.columns and "secondary_energy_mwh_per_yr" in df.columns:
+        # Create mask for valid calculations (both values > 0)
+        valid_mask = (
+            df["primary_energy_mwh_per_yr"].notna() & 
+            df["secondary_energy_mwh_per_yr"].notna() &
+            (df["primary_energy_mwh_per_yr"] > 0) & 
+            (df["secondary_energy_mwh_per_yr"] > 0)
+        )
+        
+        if len(target) == len(df) and valid_mask.any():
+            # Calculate fuel intensity: Primary Energy / Secondary Energy
+            target.loc[valid_mask, "fuel_intensity"] = (
+                df.loc[valid_mask, "primary_energy_mwh_per_yr"] / 
+                df.loc[valid_mask, "secondary_energy_mwh_per_yr"]
+            )
+            
+            calculated_count = valid_mask.sum()
+            print(f"   ✅ Calculated fuel_intensity for {calculated_count:,} entries")
+            
+            # Show statistics
+            fuel_intensity_values = target.loc[valid_mask, "fuel_intensity"]
+            print(f"   📊 Fuel Intensity Statistics:")
+            print(f"      Mean: {fuel_intensity_values.mean():.3f}")
+            print(f"      Median: {fuel_intensity_values.median():.3f}")
+            print(f"      Min: {fuel_intensity_values.min():.3f}")
+            print(f"      Max: {fuel_intensity_values.max():.3f}")
+            
+            # Set fuel_intensity to 1.0 for renewable technologies (no fuel conversion loss)
+            renewable_fuel_intensity_mask = is_renewable_tech & valid_mask
+            if renewable_fuel_intensity_mask.any():
+                target.loc[renewable_fuel_intensity_mask, "fuel_intensity"] = 1.0
+                renewable_count = renewable_fuel_intensity_mask.sum()
+                print(f"   🌱 Set fuel_intensity=1.0 for {renewable_count:,} renewable entries (no conversion loss)")
+        else:
+            print("   ⚠️  No valid primary/secondary energy data for fuel intensity calculation")
+    else:
+        print("   ⚠️  Primary or secondary energy columns not found")
+    
+    # ========================================================================
+    # FUEL INTENSITY CALCULATION COMPLETE
+    # ========================================================================
+    # fuel_intensity represents the ratio of primary to secondary energy:
+    # - Values > 1: Energy loss during conversion (typical for thermal plants)
+    # - Values = 1: No conversion loss (renewables, direct conversion)
+    # - Values < 1: Theoretical efficiency gain (rare, may indicate data issues)
+    # ========================================================================
+
     # Pathway logic (Power/Renewables vs Coal/Gas&Oil)
     # Determine pathway_unit and scenario_pathway from df columns (vectorized)
     has_primary = (
@@ -1527,6 +1587,7 @@ def step3_finalize_target_schema() -> None:
         "scenario_price",
         "fuel_price",
         "fuel_for_price",
+        "fuel_intensity",
         "pathway_unit",
         "scenario_pathway",
         "scenario_capacity_factor",
