@@ -29,8 +29,10 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
-# Import external step 4 module
+# Import external step modules
 from step4_gapfill_simple import step4_gapfill_only
+from step5_complete_cases import step5_complete_cases
+from step6_scenario_tech_filter import step6_scenario_tech_filter
 
 # Use regular pandas for better compatibility with complex operations
 import pandas as pd
@@ -1749,6 +1751,10 @@ def main() -> None:
     step3_finalize_target_schema()
     # Step 4 (uses stringency for gap-filling)
     step4_gapfill_only()
+    # Step 5 (complete cases filtering)
+    step5_complete_cases()
+    # Step 6 (scenario technology filtering)
+    step6_scenario_tech_filter()
     print_banner("AR6 Combined Pipeline — Done")
 
 
