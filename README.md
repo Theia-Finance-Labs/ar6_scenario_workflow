@@ -24,19 +24,13 @@ This pipeline takes raw AR6 climate scenario data and answers the key question: 
 ```
 Raw AR6 Climate Data (3+ GB)
          ↓
-[COMBINED PIPELINE] - Steps 1-4 orchestrated in one script
+[COMBINED PIPELINE] - Steps 1-6 orchestrated in one script
     ├─ Step 1: Format & melt wide data to long format
     ├─ Step 2: Filter, pivot, and standardize units  
     ├─ Step 3: Apply target schema and price mapping
-    └─ Step 4: Intelligent gap-filling using technology lookup
-         ↓
-Complete Gap-Filled Dataset (730 MB)
-         ↓
-[Step 5] Complete Cases Filter → Only scenarios with all essential data
-         ↓  
-Complete Scenarios Dataset (756 MB)
-         ↓
-[Step 6] Economic Viability Filter → Only profitable technologies  
+    ├─ Step 4: Intelligent gap-filling using technology lookup
+    ├─ Step 5: Complete Cases Filter → Only scenarios with all essential data
+    └─ Step 6: Economic Viability Filter → Only profitable technologies
          ↓
 Viable Investment Scenarios (270 MB)
          ↓
@@ -45,7 +39,7 @@ Viable Investment Scenarios (270 MB)
 
 ## The Combined Pipeline Explained
 
-The **`combined_pipeline.py`** is the heart of this system - a single orchestrator script that runs Steps 1-4 in sequence with memory optimization between steps. It combines data processing AND gap-filling into one optimized workflow. The subsequent filtering and analysis steps (5-6) remain separate because they serve different analytical purposes and may be run independently. Here's what the combined pipeline orchestrates:
+The **`combined_pipeline.py`** is the heart of this system - a single orchestrator script that runs Steps 1-6 in sequence with memory optimization between steps. It combines data processing, gap-filling, complete cases filtering, and economic viability analysis into one optimized workflow. Here's what the combined pipeline orchestrates:
 
 ### Step 1: Data Formatting & Cost Integration
 - **Input**: Raw AR6 feather files with wide-format data (columns for each year)
@@ -87,28 +81,34 @@ The **`combined_pipeline.py`** is the heart of this system - a single orchestrat
   - **Transparent Tracking**: Records exactly which columns were gap-filled for each row
 - **Output**: `4_final_AR6_gapfilled_complete.csv` (730MB)
 
-**Why Steps 1-4 Are Combined:**
-These steps form a complete data processing pipeline that must run in sequence. The orchestrator optimizes memory usage between steps and eliminates redundant file I/O operations.
+**Why Steps 1-6 Are Combined:**
+These steps form a complete data processing pipeline that must run in sequence. The orchestrator optimizes memory usage between steps and eliminates redundant file I/O operations, providing a single command to go from raw data to final viable scenarios.
 
 ### Memory Optimization Features:
 - **Progressive Memory Release**: Deletes intermediate DataFrames after each step
 - **Vectorized Operations**: Uses pandas vectorization instead of slow row-by-row operations
 - **Chunked Processing**: Handles 2M+ row datasets efficiently
 
-## Individual Pipeline Steps (Run After Combined Pipeline)
-
-### Step 5: Complete Cases Filter (`step5_complete_cases.py`)
+### Step 5: Complete Cases Filter (Integrated in Combined Pipeline)
 - **Purpose**: Keep only scenarios with all essential parameters present
 - **Logic**: Gap-filled data counts as "complete" - focuses on investment-ready scenarios
 - **Essential Parameters**: efficiency, lifetime, costs, capacity, energy data
 - **Output**: `5_final_AR6_complete_cases.csv` (756MB)
 
-### Step 6: Economic Viability Filter (`step6_scenario_tech_filter.py`)  
+### Step 6: Economic Viability Filter (Integrated in Combined Pipeline)
 - **Purpose**: Filter to economically profitable technologies using EBITDA analysis
 - **EBITDA Calculation**: `(Revenue - OM Costs) / Capacity` where Revenue = Energy × Price
 - **Viability Logic**: Technology is viable if EBITDA > 0 in at least one year of time series
 - **Result**: Only scenarios with profitable investment opportunities
 - **Output**: `6_final_AR6_viable_scenarios.csv` (270MB)
+
+## Individual Pipeline Steps (Optional - For Advanced Users)
+
+Steps 5 and 6 can still be run individually if needed:
+```bash
+python pipeline/step5_complete_cases.py     # Run Step 5 separately
+python pipeline/step6_scenario_tech_filter.py # Run Step 6 separately
+```
 
 ## Analysis & Statistics
 
@@ -152,15 +152,27 @@ create_technology_lookup.py - Generates/updates gap-filling lookup tables
 
 ## Quick Start
 
+### Prerequisites
+```bash
+# REQUIRED: Generate technology lookup table for gap-filling
+python create_technology_lookup.py     # Creates technology_lookup_table.csv (required for Step 4)
+```
+
 ### Run Complete Pipeline
 ```bash
 # Full pipeline (takes ~30-45 minutes for full dataset)
+python pipeline/combined_pipeline.py   # Steps 1-6: Complete processing pipeline
+
+# Generate comprehensive statistics
+python create_scenario_summary.py      # Analysis summary
+```
+
+### Alternative: Run Steps Individually
+```bash
+# If you need to run steps separately:
 python pipeline/combined_pipeline.py    # Steps 1-4: Data processing, formatting & gap-filling
 python pipeline/step5_complete_cases.py # Step 5: Complete cases only  
 python pipeline/step6_scenario_tech_filter.py # Step 6: Viable investments only
-
-# Generate comprehensive statistics
-python create_scenario_summary.py       # Analysis summary
 ```
 
 ### Key Outputs to Check
