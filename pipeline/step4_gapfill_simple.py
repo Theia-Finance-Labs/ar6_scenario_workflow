@@ -187,6 +187,56 @@ def ultra_fast_gap_fill(df: pd.DataFrame, lookup_df: pd.DataFrame) -> pd.DataFra
         
         print(f"    🎯 Total filled for {df_col}: {col_filled}")
     
+    # Special handling for fuel_intensity (only for AR6 data that doesn't have Primary/Secondary Energy)
+    if "fuel_intensity" in df.columns:
+        missing_fuel_intensity = df['fuel_intensity'].isna().sum()
+        if missing_fuel_intensity > 0:
+            print("  ⚡ Processing fuel_intensity (calculated from efficiency for AR6 data)...")
+            
+            # Calculate fuel_intensity from efficiency for fossil fuel technologies
+            fossil_keywords = ['Coal', 'Gas', 'Oil', 'Biomass']
+            is_fossil = df['technology'].astype(str).apply(
+                lambda x: any(kw in x for kw in fossil_keywords)
+            )
+            
+            # For fossil fuels: fuel_intensity = 1 / efficiency (if efficiency is available)
+            fossil_mask = is_fossil & df['efficiency_decimal'].notna() & (df['efficiency_decimal'] > 0)
+            df.loc[fossil_mask, 'fuel_intensity'] = 1.0 / df.loc[fossil_mask, 'efficiency_decimal']
+            
+            # For renewables: fuel_intensity = 0 (no fuel needed)
+            renewable_keywords = ['Solar', 'Wind', 'Hydro', 'Geothermal', 'Nuclear']
+            is_renewable = df['technology'].astype(str).apply(
+                lambda x: any(kw in x for kw in renewable_keywords)
+            )
+            df.loc[is_renewable, 'fuel_intensity'] = 0.0
+            
+            # For remaining missing values, use technology-specific defaults
+            missing_fuel_intensity = df['fuel_intensity'].isna().sum()
+            if missing_fuel_intensity > 0:
+                print(f"    Gap-filling remaining {missing_fuel_intensity} fuel_intensity values...")
+                
+                tech_defaults = {
+                    'CoalCap - w/ CCS': 2.5,  # Typical coal efficiency ~40%
+                    'CoalCap - w/o CCS': 2.0,  # Typical coal efficiency ~50%
+                    'GasCap - w/ CCS': 1.8,   # Typical gas efficiency ~55%
+                    'GasCap - w/o CCS': 1.6,  # Typical gas efficiency ~62%
+                    'OilCap - w/ CCS': 2.2,   # Typical oil efficiency ~45%
+                    'OilCap - w/o CCS': 1.8,  # Typical oil efficiency ~55%
+                    'BiomassCap - w/ CCS': 2.0, # Typical biomass efficiency ~50%
+                    'BiomassCap - w/o CCS': 1.8, # Typical biomass efficiency ~55%
+                }
+                
+                for tech, default_intensity in tech_defaults.items():
+                    tech_mask = (df['technology'] == tech) & df['fuel_intensity'].isna()
+                    df.loc[tech_mask, 'fuel_intensity'] = default_intensity
+                    if tech_mask.sum() > 0:
+                        print(f"      Set {tech}: {tech_mask.sum()} entries to {default_intensity}")
+            
+            fuel_filled = df['fuel_intensity'].notna().sum()
+            print(f"    ✅ Fuel intensity: {fuel_filled} values available")
+        else:
+            print("  ✅ Fuel intensity already calculated from Primary/Secondary Energy data")
+    
     # Print summary
     total_filled = sum(filled_counts.values())
     print(f"🎯 Ultra-fast gap-filling completed: {total_filled:,} total values filled")
