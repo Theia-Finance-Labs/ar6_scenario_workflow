@@ -218,6 +218,21 @@ def flag_viable_scenarios(input_file, output_file):
     
     return df, viable_scenarios
 
+def step6_scenario_tech_filter():
+    """
+    Wrapper function for importable use from combined pipeline.
+    Calls flag_viable_scenarios with default file paths.
+    """
+    input_file = "5_final_AR6_complete_cases.csv"
+    output_file = "6_final_AR6_viable_scenarios.csv"
+    
+    if not Path(input_file).exists():
+        logging.error(f"Input file not found: {input_file}")
+        return
+    
+    result_df, viable_scenarios = flag_viable_scenarios(input_file, output_file)
+    return result_df
+
 def main():
     """Main execution function."""
     # File paths

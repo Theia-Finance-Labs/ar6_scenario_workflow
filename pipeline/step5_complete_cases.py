@@ -307,6 +307,20 @@ def filter_complete_cases(input_file, output_file):
     
     return complete_df
 
+def step5_complete_cases():
+    """
+    Wrapper function for importable use from combined pipeline.
+    Calls filter_complete_cases with default file paths.
+    """
+    input_file = "4_final_AR6_gapfilled_complete.csv"
+    output_file = "5_final_AR6_complete_cases.csv"
+    
+    if not Path(input_file).exists():
+        logging.error(f"Input file not found: {input_file}")
+        return
+    
+    return filter_complete_cases(input_file, output_file)
+
 def main():
     """Main execution function."""
     # File paths
