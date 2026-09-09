@@ -85,9 +85,9 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
         raise ValueError("dataset_type must be 'ISO3' or 'R10'")
 
     input_file = (
-        "data/AR6_Scenarios_Database_ISO3_v1.1.feather"
+        "AR6_Scenarios_Database_ISO3_v1.1.csv"
         if dataset_type == "ISO3"
-        else "data/AR6_Scenarios_Database_R10_regions_v1.1.feather"
+        else "AR6_Scenarios_Database_R10_regions_v1.1.csv"
     )
     output_file = (
         "1_intermediate_AR6_scenario_formatting_ISO3.csv"
@@ -98,16 +98,16 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
     print_banner(f"STEP 1 ({dataset_type}) — Loading and Melting AR6 Data")
 
     try:
-        source = pd.read_feather(input_file)
+        source = pd.read_csv(input_file)
 
         # Filter for target models to improve performance
-        target_models = ["WITCH 5.0"]  # , "IMAGE 3.2"]
-        target_scenarios = ["EN_NPi2020_500", "CO_CurPol"]
+        target_models = ["AIM/CGE 2.2"]  # , "IMAGE 3.2"]
+        # target_scenarios = ["EN_NPi2020_500", "CO_CurPol"]
         print(f"   Before model filter: {source.shape[0]:,} rows")
-        #source = source[
-        #    source["Model"].isin(target_models)
-        #    & source["Scenario"].isin(target_scenarios)
-        #]
+        source = source[
+            source["Model"].isin(target_models)
+            #    & source["Scenario"].isin(target_scenarios)
+        ]
         print(f"   After model filter (WITCH 5.0, IMAGE 3.2): {source.shape[0]:,} rows")
 
         if source.empty:
@@ -950,13 +950,13 @@ def _normalize_fuel_label(label: str) -> str:
 def build_price_tables(step1_df: Optional[pd.DataFrame]) -> Dict[str, pd.DataFrame]:
     """
     Build structured price tables from raw AR6 price data.
-    
+
     Returns 4 price tables:
     - elec: Electricity prices (secondary energy) → Power sector revenue
     - primary: General primary energy prices → Currently unused
     - primary_by_fuel: Primary energy by fuel type → All sectors' input costs
     - secondary_by_fuel: Secondary energy by fuel type → Non-Power sectors' revenue
-    
+
     Economic interpretation:
     - Primary prices: Raw material costs (coal, gas, oil, biomass)
     - Secondary prices: Processed product prices (electricity, refined fuels)
@@ -1027,7 +1027,12 @@ def build_price_tables(step1_df: Optional[pd.DataFrame]) -> Dict[str, pd.DataFra
         ["model", "scenario", "region", "year", "Fuel_norm"], as_index=False
     )["price_usd_per_mwh"].first()
 
-    return {"elec": elec, "primary": primary, "primary_by_fuel": primary_by_fuel, "secondary_by_fuel": secondary_by_fuel}
+    return {
+        "elec": elec,
+        "primary": primary,
+        "primary_by_fuel": primary_by_fuel,
+        "secondary_by_fuel": secondary_by_fuel,
+    }
 
 
 def step3_finalize_target_schema() -> None:
@@ -1045,7 +1050,7 @@ def step3_finalize_target_schema() -> None:
 
     # Load metadata for scenario_type and stringency mapping
     target["scenario_type"] = "target"  # Default scenario type
-    target["stringency"] = "UNKNOWN"    # Default stringency
+    target["stringency"] = "UNKNOWN"  # Default stringency
     try:
         meta_df = pd.read_excel(
             "AR6_Scenarios_Database_metadata_indicators_v1.1 2.xlsx",
@@ -1063,7 +1068,9 @@ def step3_finalize_target_schema() -> None:
                 + target["scenario"].astype(str)
             )
             target["stringency"] = key.map(lookup).fillna("UNKNOWN")
-            print(f"✅ Mapped stringency for {(target['stringency'] != 'UNKNOWN').sum():,} scenarios")
+            print(
+                f"✅ Mapped stringency for {(target['stringency'] != 'UNKNOWN').sum():,} scenarios"
+            )
     except FileNotFoundError:
         print("⚠️ Metadata Excel not found. stringency set to UNKNOWN.")
 
@@ -1109,7 +1116,7 @@ def step3_finalize_target_schema() -> None:
 
     # Build keys for joins across all price merges
     join_key = ["scenario_provider", "scenario", "scenario_geography", "scenario_year"]
-    
+
     # ========================================================================
     # PREPARE PRICE TABLES WITH CONSISTENT COLUMN NAMES
     # ========================================================================
@@ -1164,10 +1171,10 @@ def step3_finalize_target_schema() -> None:
     # ========================================================================
     # Power/Renewables: Get electricity prices (what they sell)
     # Coal/Gas&Oil: Get processed fuel prices (what they sell)
-    
+
     # Step 1: Merge electricity prices for Power sector
     target = target.merge(elec, on=join_key, how="left")
-    
+
     # Step 2: Prepare secondary energy prices by fuel for non-Power sectors
     # Table 4: Secondary energy prices by fuel (for non-Power sector revenue)
     sec_by_fuel_for_scenario = (
@@ -1182,18 +1189,18 @@ def step3_finalize_target_schema() -> None:
             }
         )
         if not price_tables["secondary_by_fuel"].empty
-        else pd.DataFrame(columns=join_key + ["fuel_for_scenario_norm", "scenario_price_secondary"])
+        else pd.DataFrame(
+            columns=join_key + ["fuel_for_scenario_norm", "scenario_price_secondary"]
+        )
     )
-    
+
     # Step 3: Merge secondary energy prices by fuel type for Coal/Gas&Oil sectors
     target["fuel_for_scenario_norm"] = target["Fuel"].apply(_normalize_fuel_label)
     target = target.merge(
-        sec_by_fuel_for_scenario, 
-        on=join_key + ["fuel_for_scenario_norm"], 
-        how="left"
+        sec_by_fuel_for_scenario, on=join_key + ["fuel_for_scenario_norm"], how="left"
     )
     target = target.drop(columns=["fuel_for_scenario_norm"], errors="ignore")
-    
+
     # Step 4: Assign scenario_price based on sector type
     is_power_like = (
         target["sector"].isin(["Power", "Renewables"])
@@ -1202,10 +1209,10 @@ def step3_finalize_target_schema() -> None:
     )
     target["scenario_price"] = np.where(
         is_power_like,
-        target["scenario_price_electricity"],    # Power: electricity prices
-        target["scenario_price_secondary"],      # Others: processed fuel prices
+        target["scenario_price_electricity"],  # Power: electricity prices
+        target["scenario_price_secondary"],  # Others: processed fuel prices
     )
-    
+
     # Clean up temporary columns
     target = target.drop(
         columns=["scenario_price_electricity", "scenario_price_secondary"],
@@ -1217,11 +1224,13 @@ def step3_finalize_target_schema() -> None:
     # ========================================================================
     # All sectors get primary energy prices (raw material costs)
     # Renewables get fuel_price = 0 (no fuel consumption)
-    
+
     # Step 1: Map technology fuel types to primary energy prices
     target["fuel_for_price"] = target["Fuel"]
-    target["fuel_for_price_norm"] = target["fuel_for_price"].apply(_normalize_fuel_label)
-    
+    target["fuel_for_price_norm"] = target["fuel_for_price"].apply(
+        _normalize_fuel_label
+    )
+
     # Step 2: Merge primary energy prices by fuel type (input costs for all sectors)
     target = target.merge(
         primary_by_fuel, on=join_key + ["fuel_for_price_norm"], how="left"
@@ -1231,7 +1240,7 @@ def step3_finalize_target_schema() -> None:
     # Step 3: Override fuel_price to 0 for renewable technologies (no fuel consumption)
     renewable_tech_keywords = [
         "Solar",
-        "Wind", 
+        "Wind",
         "Hydro",
         "Geothermal",
         "Nuclear",
@@ -1249,7 +1258,7 @@ def step3_finalize_target_schema() -> None:
     print(
         f"Set fuel_price=0 for {is_renewable_tech.sum()} renewable technology entries"
     )
-    
+
     # ========================================================================
     # PRICING ASSIGNMENT COMPLETE
     # ========================================================================
@@ -1265,32 +1274,35 @@ def step3_finalize_target_schema() -> None:
     # Fuel intensity = Primary Energy / Secondary Energy
     # Represents conversion efficiency from primary fuel to secondary output
     # Example: GasCap fuel_intensity = Primary Energy|Gas|Electricity / Secondary Energy|Electricity|Gas
-    
+
     print("🔥 Calculating fuel intensity (Primary Energy / Secondary Energy)...")
-    
+
     # Initialize fuel_intensity column
     target["fuel_intensity"] = np.nan
-    
+
     # Calculate fuel intensity where both primary and secondary energy data exist
-    if "primary_energy_mwh_per_yr" in df.columns and "secondary_energy_mwh_per_yr" in df.columns:
+    if (
+        "primary_energy_mwh_per_yr" in df.columns
+        and "secondary_energy_mwh_per_yr" in df.columns
+    ):
         # Create mask for valid calculations (both values > 0)
         valid_mask = (
-            df["primary_energy_mwh_per_yr"].notna() & 
-            df["secondary_energy_mwh_per_yr"].notna() &
-            (df["primary_energy_mwh_per_yr"] > 0) & 
-            (df["secondary_energy_mwh_per_yr"] > 0)
+            df["primary_energy_mwh_per_yr"].notna()
+            & df["secondary_energy_mwh_per_yr"].notna()
+            & (df["primary_energy_mwh_per_yr"] > 0)
+            & (df["secondary_energy_mwh_per_yr"] > 0)
         )
-        
+
         if len(target) == len(df) and valid_mask.any():
             # Calculate fuel intensity: Primary Energy / Secondary Energy
             target.loc[valid_mask, "fuel_intensity"] = (
-                df.loc[valid_mask, "primary_energy_mwh_per_yr"] / 
-                df.loc[valid_mask, "secondary_energy_mwh_per_yr"]
+                df.loc[valid_mask, "primary_energy_mwh_per_yr"]
+                / df.loc[valid_mask, "secondary_energy_mwh_per_yr"]
             )
-            
+
             calculated_count = valid_mask.sum()
             print(f"   ✅ Calculated fuel_intensity for {calculated_count:,} entries")
-            
+
             # Show statistics
             fuel_intensity_values = target.loc[valid_mask, "fuel_intensity"]
             print(f"   📊 Fuel Intensity Statistics:")
@@ -1298,18 +1310,22 @@ def step3_finalize_target_schema() -> None:
             print(f"      Median: {fuel_intensity_values.median():.3f}")
             print(f"      Min: {fuel_intensity_values.min():.3f}")
             print(f"      Max: {fuel_intensity_values.max():.3f}")
-            
+
             # Set fuel_intensity to 1.0 for renewable technologies (no fuel conversion loss)
             renewable_fuel_intensity_mask = is_renewable_tech & valid_mask
             if renewable_fuel_intensity_mask.any():
                 target.loc[renewable_fuel_intensity_mask, "fuel_intensity"] = 1.0
                 renewable_count = renewable_fuel_intensity_mask.sum()
-                print(f"   🌱 Set fuel_intensity=1.0 for {renewable_count:,} renewable entries (no conversion loss)")
+                print(
+                    f"   🌱 Set fuel_intensity=1.0 for {renewable_count:,} renewable entries (no conversion loss)"
+                )
         else:
-            print("   ⚠️  No valid primary/secondary energy data for fuel intensity calculation")
+            print(
+                "   ⚠️  No valid primary/secondary energy data for fuel intensity calculation"
+            )
     else:
         print("   ⚠️  Primary or secondary energy columns not found")
-    
+
     # ========================================================================
     # FUEL INTENSITY CALCULATION COMPLETE
     # ========================================================================
@@ -1534,40 +1550,49 @@ def step3_finalize_target_schema() -> None:
     # CRITICAL: Apply extreme value filtering after unit conversions and before save
     print_banner("STEP 3b — Extreme Value Filtering")
     print("🚫 Applying extreme value filtering to remove unrealistic values...")
-    
+
     # Define bounds for extreme value filtering (user-specified)
     bounds = {
-        'efficiency_decimal': (0.2, 1.0),
-        'scenario_price': (0, 200),
-        'fuel_price': (0, 200),
-        'capital_cost_usd_per_mw': (0, 1e7),
-        'om_cost_usd_per_mw_per_yr': (0, 5e5)
+        "efficiency_decimal": (0.2, 1.0),
+        "scenario_price": (0, 200),
+        "fuel_price": (0, 200),
+        "capital_cost_usd_per_mw": (0, 1e7),
+        "om_cost_usd_per_mw_per_yr": (0, 5e5),
     }
-    
+
     # Count violations before filtering
     violations_before = 0
     for col, (min_val, max_val) in bounds.items():
         if col in target_with_global.columns:
-            violations = ((target_with_global[col] < min_val) | (target_with_global[col] > max_val)).sum()
+            violations = (
+                (target_with_global[col] < min_val)
+                | (target_with_global[col] > max_val)
+            ).sum()
             violations_before += violations
             if violations > 0:
-                print(f"   {col}: {violations:,} values outside bounds ({min_val}-{max_val})")
-    
+                print(
+                    f"   {col}: {violations:,} values outside bounds ({min_val}-{max_val})"
+                )
+
     print(f"   Total violations before filtering: {violations_before:,}")
-    
+
     # Apply filtering by setting out-of-bounds values to NaN
     filtered_count = 0
     for col, (min_val, max_val) in bounds.items():
         if col in target_with_global.columns:
             # Create mask for out-of-bounds values
-            out_of_bounds = (target_with_global[col] < min_val) | (target_with_global[col] > max_val)
+            out_of_bounds = (target_with_global[col] < min_val) | (
+                target_with_global[col] > max_val
+            )
             count_filtered = out_of_bounds.sum()
-            
+
             if count_filtered > 0:
                 target_with_global.loc[out_of_bounds, col] = np.nan
                 filtered_count += count_filtered
-                print(f"   ✅ Filtered {count_filtered:,} out-of-bounds values for {col}")
-    
+                print(
+                    f"   ✅ Filtered {count_filtered:,} out-of-bounds values for {col}"
+                )
+
     if filtered_count > 0:
         print(f"✅ Total extreme values filtered: {filtered_count:,}")
     else:
@@ -1660,7 +1685,7 @@ def create_global_geography(df_in: pd.DataFrame) -> pd.DataFrame:
     simple_avg_cols = ["scenario_price", "fuel_price", "carbon_price_usd_per_tco2"]
     simple_avg_cols = [c for c in simple_avg_cols if c in df.columns]
 
-    def aggregate_to_global(group: pd.DataFrame) -> pd.Series:
+    def aggregate_to_global(group: pd.DataFrame, **kwargs) -> pd.Series:
         """Aggregate a group of geographies to global values"""
         result = {}
 

@@ -151,7 +151,10 @@ def flag_viable_scenarios(input_file, output_file):
     logging.info(f"Scenarios evaluated: {len(scenarios):,}")
     logging.info(f"Viable scenarios found: {len(viable_scenarios):,}")
     logging.info(f"Non-viable scenarios: {len(scenarios) - len(viable_scenarios):,}")
-    logging.info(f"Non-viable rate: {(len(scenarios) - len(viable_scenarios))/len(scenarios)*100:.1f}%")
+    if len(scenarios) > 0:
+        logging.info(f"Non-viable rate: {(len(scenarios) - len(viable_scenarios))/len(scenarios)*100:.1f}%")
+    else:
+        logging.info("Non-viable rate: N/A (no scenarios to evaluate)")
     
     # Add scenario_viable flag to all records instead of filtering
     df['scenario_viable'] = df['scenario'].map(scenario_compliance_map)

@@ -48,8 +48,8 @@ def load_and_process_raw_ar6() -> pd.DataFrame:
     
     # Try to load raw feather files
     raw_files = [
-        "data/AR6_Scenarios_Database_ISO3_v1.1.feather",
-        "data/AR6_Scenarios_Database_R10_regions_v1.1.feather"
+        "AR6_Scenarios_Database_ISO3_v1.1.feather",
+        "AR6_Scenarios_Database_R10_regions_v1.1.feather"
     ]
     
     all_processed = []
