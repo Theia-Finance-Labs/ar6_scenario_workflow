@@ -24,15 +24,18 @@ Notes:
 
 from __future__ import annotations
 
+import argparse
 import gc
 import sys
+import tempfile
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, Iterator, List, Tuple, Optional
 
 # Import external step modules
 from step4_gapfill_simple import step4_gapfill_only
 from step5_complete_cases import step5_complete_cases
 from step6_scenario_tech_filter import step6_scenario_tech_filter
+from fuel_price_validation import classify_scenario_type
 
 # Use regular pandas for better compatibility with complex operations
 import pandas as pd
@@ -70,12 +73,100 @@ def memory_release(*objs) -> None:
     gc.collect()
 
 
+def capacity_pathway_mask(sector: pd.Series, capacity: pd.Series) -> pd.Series:
+    """Rows whose scenario pathway is reported from installed capacity."""
+    return sector.astype(str).isin(["Power", "Renewables"]) & capacity.notna()
+
+
+def out_of_bounds_mask(
+    values: pd.Series, minimum: float, maximum: Optional[float]
+) -> pd.Series:
+    mask = values < minimum
+    if maximum is not None:
+        mask = mask | (values > maximum)
+    return mask
+
+
 # ================================
 # Step 1: Format AR6 (ISO3 & R10)
 # ================================
 
 
-def step1_process_dataset(dataset_type: str) -> Optional[str]:
+def _default_input_candidates(dataset_type: str) -> List[Path]:
+    stem = (
+        "AR6_Scenarios_Database_ISO3_v1.1"
+        if dataset_type == "ISO3"
+        else "AR6_Scenarios_Database_R10_regions_v1.1"
+    )
+    return [
+        Path("data") / f"{stem}.feather",
+        Path("data") / f"{stem}.csv",
+        Path(f"{stem}.feather"),
+        Path(f"{stem}.csv"),
+    ]
+
+
+def _resolve_input_path(dataset_type: str, explicit_path: Optional[str]) -> Optional[Path]:
+    candidates = [Path(explicit_path)] if explicit_path else _default_input_candidates(dataset_type)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _iter_csv_model_partitions(
+    input_path: Path,
+    relevant_variables: set[str],
+    partition_count: int = 32,
+    chunk_size: int = 100_000,
+) -> Iterator[pd.DataFrame]:
+    """Stream a large AR6 CSV into stable model partitions.
+
+    All rows for a model land in the same temporary partition, so the existing
+    self-joins remain correct while peak memory stays bounded.
+    """
+    header = pd.read_csv(input_path, nrows=0).columns.tolist()
+    id_cols = ["Model", "Scenario", "Region", "Variable", "Unit"]
+    missing = sorted(set(id_cols) - set(header))
+    if missing:
+        raise ValueError(f"{input_path} is missing required columns: {missing}")
+    year_cols = filter_year_columns([c for c in header if c not in id_cols])
+    usecols = id_cols + year_cols
+
+    with tempfile.TemporaryDirectory(prefix="ar6_csv_partitions_") as tmp:
+        tmp_path = Path(tmp)
+        written: set[int] = set()
+        for chunk in pd.read_csv(input_path, usecols=usecols, chunksize=chunk_size):
+            chunk = chunk[chunk["Variable"].isin(relevant_variables)]
+            if chunk.empty:
+                continue
+            buckets = (
+                pd.util.hash_pandas_object(chunk["Model"], index=False).astype("uint64")
+                % partition_count
+            )
+            for bucket, part in chunk.groupby(buckets, sort=False):
+                bucket_id = int(bucket)
+                part_path = tmp_path / f"part_{bucket_id:02d}.csv"
+                part.to_csv(
+                    part_path,
+                    mode="a",
+                    header=bucket_id not in written,
+                    index=False,
+                )
+                written.add(bucket_id)
+            del chunk
+            gc.collect()
+
+        for bucket_id in sorted(written):
+            yield pd.read_csv(tmp_path / f"part_{bucket_id:02d}.csv")
+
+
+def step1_process_dataset(
+    dataset_type: str,
+    input_path: Optional[str] = None,
+    _source_override: Optional[pd.DataFrame] = None,
+    _append_output: bool = False,
+) -> Optional[str]:
     """
     Process either ISO3 or R10 dataset into the intermediate CSV used by Step 2.
     Returns the output filename if successful; otherwise None.
@@ -84,11 +175,6 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
     if dataset_type not in {"ISO3", "R10"}:
         raise ValueError("dataset_type must be 'ISO3' or 'R10'")
 
-    input_file = (
-        "AR6_Scenarios_Database_ISO3_v1.1.csv"
-        if dataset_type == "ISO3"
-        else "AR6_Scenarios_Database_R10_regions_v1.1.csv"
-    )
     output_file = (
         "1_intermediate_AR6_scenario_formatting_ISO3.csv"
         if dataset_type == "ISO3"
@@ -98,29 +184,57 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
     print_banner(f"STEP 1 ({dataset_type}) — Loading and Melting AR6 Data")
 
     try:
-        source = pd.read_csv(input_file)
+        mapping = pd.read_csv("ar6_variables_with_mapping.csv")
+    except FileNotFoundError:
+        print("❌ Missing required input: ar6_variables_with_mapping.csv")
+        return None
+
+    resolved_input = _resolve_input_path(dataset_type, input_path)
+    if _source_override is None:
+        if resolved_input is None:
+            searched = ", ".join(str(p) for p in _default_input_candidates(dataset_type))
+            print(f"❌ Missing required {dataset_type} input; searched: {searched}")
+            return None
+        print(f"📁 Using {resolved_input}")
+        if resolved_input.suffix.lower() == ".csv":
+            relevant_variables = set(mapping["variable"].dropna().astype(str))
+            wrote_any = False
+            for partition_number, source_partition in enumerate(
+                _iter_csv_model_partitions(resolved_input, relevant_variables), start=1
+            ):
+                print(
+                    f"   Processing CSV model partition {partition_number} "
+                    f"({source_partition['Model'].nunique()} models)"
+                )
+                result = step1_process_dataset(
+                    dataset_type,
+                    input_path=str(resolved_input),
+                    _source_override=source_partition,
+                    _append_output=wrote_any,
+                )
+                wrote_any = wrote_any or result is not None
+            return output_file if wrote_any else None
+        source = pd.read_feather(resolved_input)
+    else:
+        source = _source_override
+
+    try:
 
         # Filter for target models to improve performance
-        target_models = ["AIM/CGE 2.2"]  # , "IMAGE 3.2"]
-        # target_scenarios = ["EN_NPi2020_500", "CO_CurPol"]
+        target_models = ["WITCH 5.0"]  # , "IMAGE 3.2"]
+        target_scenarios = ["EN_NPi2020_500", "CO_CurPol"]
         print(f"   Before model filter: {source.shape[0]:,} rows")
-        source = source[
-            source["Model"].isin(target_models)
-            #    & source["Scenario"].isin(target_scenarios)
-        ]
+        #source = source[
+        #    source["Model"].isin(target_models)
+        #    & source["Scenario"].isin(target_scenarios)
+        #]
         print(f"   After model filter (WITCH 5.0, IMAGE 3.2): {source.shape[0]:,} rows")
 
         if source.empty:
             print("❌ No data found for target models (WITCH 5.0, IMAGE 3.2)")
             return None
-    except FileNotFoundError:
-        print(f"❌ Missing required input: {input_file}")
-        return None
-
-    try:
-        mapping = pd.read_csv("ar6_variables_with_mapping.csv")
-    except FileNotFoundError:
-        print("❌ Missing required input: ar6_variables_with_mapping.csv")
+    except (KeyError, ValueError) as exc:
+        print(f"❌ Invalid {dataset_type} input: {exc}")
         return None
 
     print(f"AR6 data shape: {source.shape}")
@@ -375,6 +489,20 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
                 how="left",
             )
 
+    # Step 2 consumes only pathway rows, while Step 3 reads Price rows from
+    # this intermediate. Cost/efficiency/lifetime data are already attached
+    # as columns above, so writing every other mapped AR6 variable only burns
+    # disk and memory without changing downstream results.
+    downstream_row_types = {
+        "Capacity",
+        "Capacity Additions",
+        "Secondary Energy",
+        "Primary Energy",
+        "Lifetime",
+        "Price",
+    }
+    merged = merged[merged["col1"].isin(downstream_row_types)].copy()
+
     # Final output selection
     final_cols = [
         "model",
@@ -411,8 +539,18 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
         "col4",
         "col5",
     ]
-    final_cols = [c for c in final_cols if c in merged.columns]
-    merged[final_cols].to_csv(output_file, index=False)
+    # Every partition must append the exact same positional CSV schema. Models
+    # legitimately omit some metrics, so materialize those columns as nulls
+    # instead of shortening that partition's rows beneath the first header.
+    for column in final_cols:
+        if column not in merged.columns:
+            merged[column] = np.nan
+    merged[final_cols].to_csv(
+        output_file,
+        index=False,
+        mode="a" if _append_output else "w",
+        header=not _append_output,
+    )
     print(f"✅ Wrote {output_file} | Shape: {merged[final_cols].shape}")
 
     memory_release(
@@ -430,10 +568,22 @@ def step1_process_dataset(dataset_type: str) -> Optional[str]:
     return output_file
 
 
-def step1_run() -> None:
+def step1_run(
+    iso3_input: Optional[str] = None, r10_input: Optional[str] = None
+) -> None:
     """Run Step 1 for both ISO3 and R10 (if available)."""
-    _ = step1_process_dataset("ISO3")
-    _ = step1_process_dataset("R10")
+    missing = []
+    if _resolve_input_path("ISO3", iso3_input) is None:
+        missing.append("ISO3")
+    if _resolve_input_path("R10", r10_input) is None:
+        missing.append("R10")
+    if missing:
+        raise FileNotFoundError(
+            "Both AR6 v1.1 source datasets are required; refusing to reuse "
+            f"stale intermediate files. Missing: {', '.join(missing)}"
+        )
+    _ = step1_process_dataset("ISO3", iso3_input)
+    _ = step1_process_dataset("R10", r10_input)
 
 
 # =============================================
@@ -621,16 +771,23 @@ def step2_filter_and_pivot() -> None:
         if c in cost_data.columns and c in pivoted.columns
     ]
 
+    # Step 1 already extracts OM Cost/Capital Cost/Efficiency into sidecar
+    # columns (see extract_metric) and merges them onto every long-format
+    # row, so no row's col1 is ever actually "OM Cost"/"Capital
+    # Cost"/"Efficiency" by the time it reaches Step 2. Fall back to those
+    # sidecar columns instead of silently dropping real reported values.
+    sidecar_columns = {
+        "OM Cost": "om_cost",
+        "Capital Cost": "capital_cost",
+        "Efficiency": "efficiency",
+    }
+
     def add_cost_metric(
         pivoted_df: pd.DataFrame,
         cost_df: pd.DataFrame,
         metric_name: str,
         join_cols: List[str],
     ) -> pd.DataFrame:
-        metric_df = cost_df[cost_df["col1"] == metric_name].copy()
-        if metric_df.empty:
-            # Return original df if the metric is missing
-            return pivoted_df
         if metric_name == "OM Cost":
             col_name = "om_cost_usd_per_mw_per_yr"
         elif metric_name == "Capital Cost":
@@ -638,20 +795,40 @@ def step2_filter_and_pivot() -> None:
         elif metric_name == "Efficiency":
             col_name = "efficiency_percent"
         else:
-            # Best-effort naming
-            unit_mode = metric_df["unit"].mode()
-            unit_str = unit_mode.iloc[0] if not unit_mode.empty else ""
-            unit_clean = (
-                unit_str.replace("US$2010/", "")
-                .replace("/", "_per_")
-                .replace(" ", "_")
-                .lower()
+            col_name = None
+
+        metric_df = cost_df[cost_df["col1"] == metric_name].copy()
+        if not metric_df.empty:
+            if col_name is None:
+                # Best-effort naming
+                unit_mode = metric_df["unit"].mode()
+                unit_str = unit_mode.iloc[0] if not unit_mode.empty else ""
+                unit_clean = (
+                    unit_str.replace("US$2010/", "")
+                    .replace("/", "_per_")
+                    .replace(" ", "_")
+                    .lower()
+                )
+                col_name = metric_name.lower().replace(" ", "_") + (
+                    f"_{unit_clean}" if unit_clean else ""
+                )
+            metric_df = metric_df[join_cols + ["value"]].rename(columns={"value": col_name})
+            return pivoted_df.merge(metric_df, on=join_cols, how="left")
+
+        sidecar_col = sidecar_columns.get(metric_name)
+        if col_name and sidecar_col and sidecar_col in cost_df.columns:
+            metric_df = (
+                cost_df[join_cols + [sidecar_col]]
+                .dropna(subset=[sidecar_col])
+                .groupby(join_cols, as_index=False)[sidecar_col]
+                .first()
+                .rename(columns={sidecar_col: col_name})
             )
-            col_name = metric_name.lower().replace(" ", "_") + (
-                f"_{unit_clean}" if unit_clean else ""
-            )
-        metric_df = metric_df[join_cols + ["value"]].rename(columns={"value": col_name})
-        return pivoted_df.merge(metric_df, on=join_cols, how="left")
+            if not metric_df.empty:
+                return pivoted_df.merge(metric_df, on=join_cols, how="left")
+
+        # Metric is missing under both paths; return original df unchanged.
+        return pivoted_df
 
     pivoted = add_cost_metric(pivoted, cost_data, "OM Cost", join_cols)
     pivoted = add_cost_metric(pivoted, cost_data, "Capital Cost", join_cols)
@@ -950,13 +1127,13 @@ def _normalize_fuel_label(label: str) -> str:
 def build_price_tables(step1_df: Optional[pd.DataFrame]) -> Dict[str, pd.DataFrame]:
     """
     Build structured price tables from raw AR6 price data.
-
+    
     Returns 4 price tables:
     - elec: Electricity prices (secondary energy) → Power sector revenue
     - primary: General primary energy prices → Currently unused
     - primary_by_fuel: Primary energy by fuel type → All sectors' input costs
     - secondary_by_fuel: Secondary energy by fuel type → Non-Power sectors' revenue
-
+    
     Economic interpretation:
     - Primary prices: Raw material costs (coal, gas, oil, biomass)
     - Secondary prices: Processed product prices (electricity, refined fuels)
@@ -1011,13 +1188,27 @@ def build_price_tables(step1_df: Optional[pd.DataFrame]) -> Dict[str, pd.DataFra
         "price_usd_per_mwh"
     ].first()
 
-    # Primary energy by fuel (fuel-specific table for fuel_price)
+    # Primary energy by fuel (fuel-specific table for fuel_price). Preserve
+    # the exact AR6 source variable and pre-conversion unit for lineage.
     primary_by_fuel = prices[(prices["col2"] == "Primary Energy")][
-        ["model", "scenario", "region", "year", "Fuel_norm", "price_usd_per_mwh"]
+        [
+            "model",
+            "scenario",
+            "region",
+            "year",
+            "Fuel_norm",
+            "price_usd_per_mwh",
+            "variable",
+            "unit",
+        ]
     ].copy()
     primary_by_fuel = primary_by_fuel.groupby(
         ["model", "scenario", "region", "year", "Fuel_norm"], as_index=False
-    )["price_usd_per_mwh"].first()
+    ).agg(
+        price_usd_per_mwh=("price_usd_per_mwh", "first"),
+        fuel_price_source_variable=("variable", "first"),
+        fuel_price_source_unit=("unit", "first"),
+    )
 
     # Secondary energy by fuel (fuel-specific table)
     secondary_by_fuel = prices[(prices["col2"] == "Secondary Energy")][
@@ -1027,12 +1218,7 @@ def build_price_tables(step1_df: Optional[pd.DataFrame]) -> Dict[str, pd.DataFra
         ["model", "scenario", "region", "year", "Fuel_norm"], as_index=False
     )["price_usd_per_mwh"].first()
 
-    return {
-        "elec": elec,
-        "primary": primary,
-        "primary_by_fuel": primary_by_fuel,
-        "secondary_by_fuel": secondary_by_fuel,
-    }
+    return {"elec": elec, "primary": primary, "primary_by_fuel": primary_by_fuel, "secondary_by_fuel": secondary_by_fuel}
 
 
 def step3_finalize_target_schema() -> None:
@@ -1050,7 +1236,7 @@ def step3_finalize_target_schema() -> None:
 
     # Load metadata for scenario_type and stringency mapping
     target["scenario_type"] = "target"  # Default scenario type
-    target["stringency"] = "UNKNOWN"  # Default stringency
+    target["stringency"] = "UNKNOWN"    # Default stringency
     try:
         meta_df = pd.read_excel(
             "AR6_Scenarios_Database_metadata_indicators_v1.1 2.xlsx",
@@ -1068,9 +1254,7 @@ def step3_finalize_target_schema() -> None:
                 + target["scenario"].astype(str)
             )
             target["stringency"] = key.map(lookup).fillna("UNKNOWN")
-            print(
-                f"✅ Mapped stringency for {(target['stringency'] != 'UNKNOWN').sum():,} scenarios"
-            )
+            print(f"✅ Mapped stringency for {(target['stringency'] != 'UNKNOWN').sum():,} scenarios")
     except FileNotFoundError:
         print("⚠️ Metadata Excel not found. stringency set to UNKNOWN.")
 
@@ -1091,6 +1275,11 @@ def step3_finalize_target_schema() -> None:
     # Price unit & indicator (fixed as USD/MWh as in original script)
     target["price_unit"] = "USD/MWh"
     target["price_indicator"] = np.nan
+
+    # AR6 climate categories C7/C8 are baseline/current-policy scenarios.
+    # This classification must exist before Step 4 can perform baseline-first
+    # price filling for every provider represented in the metadata.
+    target["scenario_type"] = classify_scenario_type(target["stringency"])
 
     # ========================================================================
     # PRICING LOGIC OVERVIEW
@@ -1116,7 +1305,7 @@ def step3_finalize_target_schema() -> None:
 
     # Build keys for joins across all price merges
     join_key = ["scenario_provider", "scenario", "scenario_geography", "scenario_year"]
-
+    
     # ========================================================================
     # PREPARE PRICE TABLES WITH CONSISTENT COLUMN NAMES
     # ========================================================================
@@ -1163,7 +1352,15 @@ def step3_finalize_target_schema() -> None:
             }
         )
         if not price_tables["primary_by_fuel"].empty
-        else pd.DataFrame(columns=join_key + ["fuel_for_price_norm", "fuel_price"])
+        else pd.DataFrame(
+            columns=join_key
+            + [
+                "fuel_for_price_norm",
+                "fuel_price",
+                "fuel_price_source_variable",
+                "fuel_price_source_unit",
+            ]
+        )
     )
 
     # ========================================================================
@@ -1171,10 +1368,10 @@ def step3_finalize_target_schema() -> None:
     # ========================================================================
     # Power/Renewables: Get electricity prices (what they sell)
     # Coal/Gas&Oil: Get processed fuel prices (what they sell)
-
+    
     # Step 1: Merge electricity prices for Power sector
     target = target.merge(elec, on=join_key, how="left")
-
+    
     # Step 2: Prepare secondary energy prices by fuel for non-Power sectors
     # Table 4: Secondary energy prices by fuel (for non-Power sector revenue)
     sec_by_fuel_for_scenario = (
@@ -1189,18 +1386,18 @@ def step3_finalize_target_schema() -> None:
             }
         )
         if not price_tables["secondary_by_fuel"].empty
-        else pd.DataFrame(
-            columns=join_key + ["fuel_for_scenario_norm", "scenario_price_secondary"]
-        )
+        else pd.DataFrame(columns=join_key + ["fuel_for_scenario_norm", "scenario_price_secondary"])
     )
-
+    
     # Step 3: Merge secondary energy prices by fuel type for Coal/Gas&Oil sectors
     target["fuel_for_scenario_norm"] = target["Fuel"].apply(_normalize_fuel_label)
     target = target.merge(
-        sec_by_fuel_for_scenario, on=join_key + ["fuel_for_scenario_norm"], how="left"
+        sec_by_fuel_for_scenario, 
+        on=join_key + ["fuel_for_scenario_norm"], 
+        how="left"
     )
     target = target.drop(columns=["fuel_for_scenario_norm"], errors="ignore")
-
+    
     # Step 4: Assign scenario_price based on sector type
     is_power_like = (
         target["sector"].isin(["Power", "Renewables"])
@@ -1209,10 +1406,10 @@ def step3_finalize_target_schema() -> None:
     )
     target["scenario_price"] = np.where(
         is_power_like,
-        target["scenario_price_electricity"],  # Power: electricity prices
-        target["scenario_price_secondary"],  # Others: processed fuel prices
+        target["scenario_price_electricity"],    # Power: electricity prices
+        target["scenario_price_secondary"],      # Others: processed fuel prices
     )
-
+    
     # Clean up temporary columns
     target = target.drop(
         columns=["scenario_price_electricity", "scenario_price_secondary"],
@@ -1224,23 +1421,24 @@ def step3_finalize_target_schema() -> None:
     # ========================================================================
     # All sectors get primary energy prices (raw material costs)
     # Renewables get fuel_price = 0 (no fuel consumption)
-
+    
     # Step 1: Map technology fuel types to primary energy prices
     target["fuel_for_price"] = target["Fuel"]
-    target["fuel_for_price_norm"] = target["fuel_for_price"].apply(
-        _normalize_fuel_label
-    )
-
+    target["fuel_for_price_norm"] = target["fuel_for_price"].apply(_normalize_fuel_label)
+    
     # Step 2: Merge primary energy prices by fuel type (input costs for all sectors)
     target = target.merge(
         primary_by_fuel, on=join_key + ["fuel_for_price_norm"], how="left"
     )
     target = target.drop(columns=["fuel_for_price_norm"], errors="ignore")
+    target["fuel_price_carbon_adjusted"] = False
+    target["fuel_price_carbon_coefficient"] = 0.0
+    target["fuel_price_fallback"] = "none"
 
     # Step 3: Override fuel_price to 0 for renewable technologies (no fuel consumption)
     renewable_tech_keywords = [
         "Solar",
-        "Wind",
+        "Wind", 
         "Hydro",
         "Geothermal",
         "Nuclear",
@@ -1255,10 +1453,14 @@ def step3_finalize_target_schema() -> None:
     )
 
     target.loc[is_renewable_tech, "fuel_price"] = 0.0
+    target.loc[
+        is_renewable_tech,
+        ["fuel_price_source_variable", "fuel_price_source_unit"],
+    ] = np.nan
     print(
         f"Set fuel_price=0 for {is_renewable_tech.sum()} renewable technology entries"
     )
-
+    
     # ========================================================================
     # PRICING ASSIGNMENT COMPLETE
     # ========================================================================
@@ -1274,35 +1476,32 @@ def step3_finalize_target_schema() -> None:
     # Fuel intensity = Primary Energy / Secondary Energy
     # Represents conversion efficiency from primary fuel to secondary output
     # Example: GasCap fuel_intensity = Primary Energy|Gas|Electricity / Secondary Energy|Electricity|Gas
-
+    
     print("🔥 Calculating fuel intensity (Primary Energy / Secondary Energy)...")
-
+    
     # Initialize fuel_intensity column
     target["fuel_intensity"] = np.nan
-
+    
     # Calculate fuel intensity where both primary and secondary energy data exist
-    if (
-        "primary_energy_mwh_per_yr" in df.columns
-        and "secondary_energy_mwh_per_yr" in df.columns
-    ):
+    if "primary_energy_mwh_per_yr" in df.columns and "secondary_energy_mwh_per_yr" in df.columns:
         # Create mask for valid calculations (both values > 0)
         valid_mask = (
-            df["primary_energy_mwh_per_yr"].notna()
-            & df["secondary_energy_mwh_per_yr"].notna()
-            & (df["primary_energy_mwh_per_yr"] > 0)
-            & (df["secondary_energy_mwh_per_yr"] > 0)
+            df["primary_energy_mwh_per_yr"].notna() & 
+            df["secondary_energy_mwh_per_yr"].notna() &
+            (df["primary_energy_mwh_per_yr"] > 0) & 
+            (df["secondary_energy_mwh_per_yr"] > 0)
         )
-
+        
         if len(target) == len(df) and valid_mask.any():
             # Calculate fuel intensity: Primary Energy / Secondary Energy
             target.loc[valid_mask, "fuel_intensity"] = (
-                df.loc[valid_mask, "primary_energy_mwh_per_yr"]
-                / df.loc[valid_mask, "secondary_energy_mwh_per_yr"]
+                df.loc[valid_mask, "primary_energy_mwh_per_yr"] / 
+                df.loc[valid_mask, "secondary_energy_mwh_per_yr"]
             )
-
+            
             calculated_count = valid_mask.sum()
             print(f"   ✅ Calculated fuel_intensity for {calculated_count:,} entries")
-
+            
             # Show statistics
             fuel_intensity_values = target.loc[valid_mask, "fuel_intensity"]
             print(f"   📊 Fuel Intensity Statistics:")
@@ -1310,22 +1509,18 @@ def step3_finalize_target_schema() -> None:
             print(f"      Median: {fuel_intensity_values.median():.3f}")
             print(f"      Min: {fuel_intensity_values.min():.3f}")
             print(f"      Max: {fuel_intensity_values.max():.3f}")
-
+            
             # Set fuel_intensity to 1.0 for renewable technologies (no fuel conversion loss)
             renewable_fuel_intensity_mask = is_renewable_tech & valid_mask
             if renewable_fuel_intensity_mask.any():
                 target.loc[renewable_fuel_intensity_mask, "fuel_intensity"] = 1.0
                 renewable_count = renewable_fuel_intensity_mask.sum()
-                print(
-                    f"   🌱 Set fuel_intensity=1.0 for {renewable_count:,} renewable entries (no conversion loss)"
-                )
+                print(f"   🌱 Set fuel_intensity=1.0 for {renewable_count:,} renewable entries (no conversion loss)")
         else:
-            print(
-                "   ⚠️  No valid primary/secondary energy data for fuel intensity calculation"
-            )
+            print("   ⚠️  No valid primary/secondary energy data for fuel intensity calculation")
     else:
         print("   ⚠️  Primary or secondary energy columns not found")
-
+    
     # ========================================================================
     # FUEL INTENSITY CALCULATION COMPLETE
     # ========================================================================
@@ -1375,8 +1570,9 @@ def step3_finalize_target_schema() -> None:
             use_secondary, df["secondary_energy_mwh_per_yr"], scenario_pathway
         )
     if "capacity_mw" in df.columns:
-        use_capacity = sec_series.isin(["Power", "Renewables"]) & has_capacity
+        use_capacity = capacity_pathway_mask(sec_series, df["capacity_mw"])
         scenario_pathway = np.where(use_capacity, df["capacity_mw"], scenario_pathway)
+        target.loc[use_capacity, "pathway_unit"] = "MW"
     target["scenario_pathway"] = scenario_pathway
 
     # Capacity factor (Power/Renewables only): secondary_energy / (capacity * 8760)
@@ -1550,49 +1746,48 @@ def step3_finalize_target_schema() -> None:
     # CRITICAL: Apply extreme value filtering after unit conversions and before save
     print_banner("STEP 3b — Extreme Value Filtering")
     print("🚫 Applying extreme value filtering to remove unrealistic values...")
-
+    
     # Define bounds for extreme value filtering (user-specified)
     bounds = {
-        "efficiency_decimal": (0.2, 1.0),
-        "scenario_price": (0, 200),
-        "fuel_price": (0, 200),
-        "capital_cost_usd_per_mw": (0, 1e7),
-        "om_cost_usd_per_mw_per_yr": (0, 5e5),
+        'efficiency_decimal': (0.2, 1.0),
+        # Negative prices retain the legacy missing-value behavior, while
+        # legitimate values above $200/MWh are no longer blanked.
+        'scenario_price': (0, None),
+        'fuel_price': (0, None),
+        'capital_cost_usd_per_mw': (0, 1e7),
+        'om_cost_usd_per_mw_per_yr': (0, 5e5)
     }
-
+    
     # Count violations before filtering
     violations_before = 0
     for col, (min_val, max_val) in bounds.items():
         if col in target_with_global.columns:
-            violations = (
-                (target_with_global[col] < min_val)
-                | (target_with_global[col] > max_val)
-            ).sum()
+            out_of_bounds = out_of_bounds_mask(
+                target_with_global[col], min_val, max_val
+            )
+            violations = out_of_bounds.sum()
             violations_before += violations
             if violations > 0:
-                print(
-                    f"   {col}: {violations:,} values outside bounds ({min_val}-{max_val})"
-                )
-
+                upper = max_val if max_val is not None else "unbounded"
+                print(f"   {col}: {violations:,} values outside bounds ({min_val}-{upper})")
+    
     print(f"   Total violations before filtering: {violations_before:,}")
-
+    
     # Apply filtering by setting out-of-bounds values to NaN
     filtered_count = 0
     for col, (min_val, max_val) in bounds.items():
         if col in target_with_global.columns:
             # Create mask for out-of-bounds values
-            out_of_bounds = (target_with_global[col] < min_val) | (
-                target_with_global[col] > max_val
+            out_of_bounds = out_of_bounds_mask(
+                target_with_global[col], min_val, max_val
             )
             count_filtered = out_of_bounds.sum()
-
+            
             if count_filtered > 0:
                 target_with_global.loc[out_of_bounds, col] = np.nan
                 filtered_count += count_filtered
-                print(
-                    f"   ✅ Filtered {count_filtered:,} out-of-bounds values for {col}"
-                )
-
+                print(f"   ✅ Filtered {count_filtered:,} out-of-bounds values for {col}")
+    
     if filtered_count > 0:
         print(f"✅ Total extreme values filtered: {filtered_count:,}")
     else:
@@ -1613,6 +1808,11 @@ def step3_finalize_target_schema() -> None:
         "price_indicator",
         "scenario_price",
         "fuel_price",
+        "fuel_price_source_variable",
+        "fuel_price_source_unit",
+        "fuel_price_carbon_adjusted",
+        "fuel_price_carbon_coefficient",
+        "fuel_price_fallback",
         "fuel_for_price",
         "fuel_intensity",
         "pathway_unit",
@@ -1766,10 +1966,28 @@ def create_global_geography(df_in: pd.DataFrame) -> pd.DataFrame:
 # =====
 
 
-def main() -> None:
+def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the AR6 scenario workflow")
+    parser.add_argument(
+        "--iso3-input",
+        help="Path to the AR6 v1.1 ISO3 .csv or .feather input",
+    )
+    parser.add_argument(
+        "--r10-input",
+        help="Path to the AR6 v1.1 R10 .csv or .feather input",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = parse_args(argv)
     print_banner("AR6 Combined Pipeline — Start")
     # Step 1: create intermediate ISO3/R10 files; each step frees memory before the next
-    step1_run()
+    try:
+        step1_run(args.iso3_input, args.r10_input)
+    except FileNotFoundError as exc:
+        print(f"❌ {exc}")
+        return 2
     # Step 2
     step2_filter_and_pivot()
     # Step 3 (now includes stringency mapping)
@@ -1781,7 +1999,8 @@ def main() -> None:
     # Step 6 (scenario technology filtering)
     step6_scenario_tech_filter()
     print_banner("AR6 Combined Pipeline — Done")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

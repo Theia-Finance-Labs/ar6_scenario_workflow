@@ -29,6 +29,7 @@ Target Technologies (15):
 
 import pandas as pd
 import numpy as np
+from pathlib import Path
 from typing import List, Dict
 
 def load_and_process_raw_ar6() -> pd.DataFrame:
@@ -46,55 +47,67 @@ def load_and_process_raw_ar6() -> pd.DataFrame:
     # Target sectors we care about (including Biomass for price data)
     target_sectors = ["Steel", "Nuclear", "Gas&Oil", "Cement", "Coal", "Renewables", "Power", "Biomass"]
     
-    # Try to load raw feather files
-    raw_files = [
-        "AR6_Scenarios_Database_ISO3_v1.1.feather",
-        "AR6_Scenarios_Database_R10_regions_v1.1.feather"
+    # Prefer Feather but accept the official wide CSVs. CSV input is streamed
+    # because either v1.1 source can exceed the memory available on a laptop.
+    stems = [
+        "AR6_Scenarios_Database_ISO3_v1.1",
+        "AR6_Scenarios_Database_R10_regions_v1.1",
     ]
+    raw_files = []
+    for stem in stems:
+        candidates = [
+            f"data/{stem}.feather",
+            f"data/{stem}.csv",
+            f"{stem}.feather",
+            f"{stem}.csv",
+        ]
+        raw_files.append(next((path for path in candidates if Path(path).is_file()), None))
+
+    missing_sources = [
+        stem for stem, raw_file in zip(stems, raw_files) if raw_file is None
+    ]
+    if missing_sources:
+        raise FileNotFoundError(
+            "Both official AR6 v1.1 inputs are required to regenerate the lookup; "
+            f"missing: {', '.join(missing_sources)}"
+        )
+
+    mapping = pd.read_csv("ar6_variables_with_mapping.csv")
     
     all_processed = []
     
     for raw_file in raw_files:
-        try:
-            print(f"   📁 Loading {raw_file}...")
-            raw_df = pd.read_feather(raw_file)
-            print(f"      Original: {raw_df.shape[0]:,} rows × {raw_df.shape[1]} columns")
-            print(f"      Models: {raw_df['Model'].nunique()}")
+        print(f"   📁 Loading {raw_file}...")
+        if raw_file.endswith(".csv"):
+            source_chunks = pd.read_csv(raw_file, chunksize=100_000)
+        else:
+            source_chunks = [pd.read_feather(raw_file)]
+
+        file_rows = 0
+        for raw_df in source_chunks:
+            file_rows += len(raw_df)
             
             # ULTRA-FAST PRE-FILTERING: Only keep variables we need
-            print(f"   🔍 Pre-filtering to target variables...")
             variable_mask = raw_df['Variable'].str.contains('|'.join([
                 'Capital Cost', 'OM Cost', 'Efficiency', 'Lifetime', 'Price'
             ]), na=False, case=False)
             
             filtered_df = raw_df[variable_mask].copy()
-            print(f"      After variable filter: {filtered_df.shape[0]:,} rows ({filtered_df.shape[0]/raw_df.shape[0]*100:.1f}%)")
             
             if filtered_df.empty:
-                print(f"      No relevant variables found in {raw_file}")
                 continue
                 
             # Load variable mapping to get sectors
-            print(f"   🗺️  Applying sector mapping...")
-            try:
-                mapping = pd.read_csv("ar6_variables_with_mapping.csv")
-                filtered_df = filtered_df.merge(mapping, left_on="Variable", right_on="variable", how="inner")
-                print(f"      After mapping: {filtered_df.shape[0]:,} rows")
-                
-                # Filter to target sectors
-                sector_filtered = filtered_df[filtered_df["Sector"].isin(target_sectors)].copy()
-                print(f"      After sector filter: {sector_filtered.shape[0]:,} rows")
-                
-            except FileNotFoundError:
-                print(f"      ⚠️  Variable mapping not found, keeping all variables")
-                sector_filtered = filtered_df.copy()
+            filtered_df = filtered_df.merge(
+                mapping, left_on="Variable", right_on="variable", how="inner"
+            )
+            sector_filtered = filtered_df[
+                filtered_df["Sector"].isin(target_sectors)
+            ].copy()
             
             if not sector_filtered.empty:
                 all_processed.append(sector_filtered)
-                
-        except FileNotFoundError:
-            print(f"   ⚠️  {raw_file} not found, skipping...")
-            continue
+        print(f"      Scanned {file_rows:,} raw rows")
     
     if not all_processed:
         print("❌ No usable data found in raw files")
@@ -832,8 +845,10 @@ def create_lookup_from_melted(melted_df: pd.DataFrame, group_name: str = "Unknow
     # Define bounds for extreme value filtering (user-specified)
     bounds = {
         'efficiency_decimal': (0.2, 1.0),
-        'fuel_price_usd_per_mwh': (0, 200),
-        'electricity_price_usd_per_mwh': (0, 200),
+        # Preserve legitimate high-price nodes. Only the existing negative
+        # price rule remains; there is no upper price cap.
+        'fuel_price_usd_per_mwh': (0, None),
+        'electricity_price_usd_per_mwh': (0, None),
         'capital_cost_usd_per_mw': (0, 1e7),
         'om_cost_usd_per_mw_per_yr': (0, 5e5)
     }
@@ -842,10 +857,14 @@ def create_lookup_from_melted(melted_df: pd.DataFrame, group_name: str = "Unknow
     violations_before = 0
     for col, (min_val, max_val) in bounds.items():
         if col in lookup_pivoted.columns:
-            violations = ((lookup_pivoted[col] < min_val) | (lookup_pivoted[col] > max_val)).sum()
+            out_of_bounds = lookup_pivoted[col] < min_val
+            if max_val is not None:
+                out_of_bounds = out_of_bounds | (lookup_pivoted[col] > max_val)
+            violations = out_of_bounds.sum()
             violations_before += violations
             if violations > 0:
-                print(f"     {col}: {violations:,} values outside bounds ({min_val}-{max_val})")
+                upper = max_val if max_val is not None else "unbounded"
+                print(f"     {col}: {violations:,} values outside bounds ({min_val}-{upper})")
     
     print(f"     Total violations before filtering: {violations_before:,}")
     
@@ -854,7 +873,9 @@ def create_lookup_from_melted(melted_df: pd.DataFrame, group_name: str = "Unknow
     for col, (min_val, max_val) in bounds.items():
         if col in lookup_pivoted.columns:
             # Create mask for out-of-bounds values
-            out_of_bounds = (lookup_pivoted[col] < min_val) | (lookup_pivoted[col] > max_val)
+            out_of_bounds = lookup_pivoted[col] < min_val
+            if max_val is not None:
+                out_of_bounds = out_of_bounds | (lookup_pivoted[col] > max_val)
             count_filtered = out_of_bounds.sum()
             
             if count_filtered > 0:
@@ -1287,16 +1308,7 @@ def main():
         print(f"   🔧 Processed {len(technology_groups)} technology groups")
         print(f"   ⚡ Ready for use in main pipeline")
         
-        # Clean up intermediate files
-        print("\n🧹 Cleaning up intermediate files...")
-        import os
-        for group_name in technology_groups.keys():
-            intermediate_file = f"temp_lookup_{group_name.lower().replace(' ', '_')}.csv"
-            try:
-                os.remove(intermediate_file)
-                print(f"   Removed {intermediate_file}")
-            except FileNotFoundError:
-                pass
+        print("\n📦 Retaining intermediate lookup files for reproducibility")
     else:
         print("❌ No lookup tables were generated")
     
